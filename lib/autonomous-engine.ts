@@ -3,7 +3,7 @@ import { api } from "@/convex/_generated/api";
 import { STRATEGY_REGISTRY } from "@/convex/strategies";
 import { runStrategy } from "./strategies";
 import { routeSignal } from "./state-manager";
-import { fetchLiveCandles, isMarketHours, isTimeframeDue } from "./market-data";
+import { fetchLiveCandles, isMarketHours, isTimeframeDue, isWeekend } from "./market-data";
 import type { TradingSignal, Account, TradingMode } from "./types";
 
 const convex = new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL!);
@@ -39,6 +39,11 @@ export async function runAutonomousEngine(userId: string, force = false): Promis
   }
   if (!account) {
     return { skipped: "No active account", timeframesRan: [], signalsFound: 0, signalsRouted: 0 };
+  }
+
+  // Never trade on weekends — enforced even with force=true
+  if (isWeekend()) {
+    return { skipped: "Weekend — markets closed until Monday 9:30 AM ET", timeframesRan: [], signalsFound: 0, signalsRouted: 0 };
   }
 
   // All strategies require NY market hours (9:30 AM – 4:00 PM ET, Mon–Fri)

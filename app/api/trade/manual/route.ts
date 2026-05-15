@@ -4,7 +4,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import * as brokerRegistry from "@/lib/broker-registry";
 import { ensureBrokerReady } from "@/lib/broker-init";
-import { YF_SYMBOL_MAP } from "@/lib/market-data";
+import { YF_SYMBOL_MAP, isWeekend } from "@/lib/market-data";
 
 const convex = new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL!);
 
@@ -35,6 +35,10 @@ export async function POST(req: NextRequest) {
 
   const { userId, symbol, action, reason } = body;
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  if (isWeekend()) {
+    return NextResponse.json({ ok: false, message: "Markets are closed for the weekend. Trading resumes Monday 9:30 AM ET." }, { status: 400 });
+  }
 
   await ensureBrokerReady(userId);
 

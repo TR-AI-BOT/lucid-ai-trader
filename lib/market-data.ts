@@ -147,6 +147,12 @@ export async function fetchLiveCandles(symbol: string, timeframe: string): Promi
     .filter(c => c.close > 0);
 }
 
+// Saturday (6) or Sunday (0) in NY time
+export function isWeekend(): boolean {
+  const { day } = getNYTime();
+  return day === 0 || day === 6;
+}
+
 // Regular session: 9:30 AM – 4:00 PM New York time, Mon–Fri
 export function isMarketHours(): boolean {
   const { day, hours, minutes } = getNYTime();
