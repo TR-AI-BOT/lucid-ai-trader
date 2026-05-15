@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runAutonomousEngine } from "@/lib/autonomous-engine";
+import { ensureBrokerReady } from "@/lib/broker-init";
 
 // Vercel Cron calls this every 5 minutes via GET
 // Can also be triggered manually: GET /api/engine/run?userId=<clerk_user_id>
@@ -23,8 +24,11 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  const force = req.nextUrl.searchParams.get("force") === "true";
+
   try {
-    const result = await runAutonomousEngine(userId);
+    await ensureBrokerReady(userId);
+    const result = await runAutonomousEngine(userId, force);
     return NextResponse.json({ ok: true, userId, ...result });
   } catch (err) {
     console.error("[Autonomous Engine]", err);

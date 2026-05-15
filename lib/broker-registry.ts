@@ -1,5 +1,8 @@
 import type { OrderResult, Position, BrokerStatus } from "./types";
 import * as tradovate from "./tradovate";
+import * as tradelocker from "./tradelocker";
+import * as tvPaper from "./tv-paper-trade";
+import type { TVOrderOptions } from "./tv-paper-trade";
 
 // ── Paper Broker (in-memory) ──────────────────────────────────────────────────
 class PaperBroker {
@@ -87,19 +90,51 @@ class TradovateBroker {
   }
 }
 
+// ── TradeLocker Broker ────────────────────────────────────────────────────────
+class TradeLockerBroker {
+  private connected = false;
+
+  async connect(creds: { email: string; password: string; server: string; apiUrl?: string }): Promise<{ ok: boolean; message: string }> {
+    try {
+      process.env.TRADELOCKER_EMAIL = creds.email;
+      process.env.TRADELOCKER_PASSWORD = creds.password;
+      process.env.TRADELOCKER_SERVER = creds.server;
+      if (creds.apiUrl) process.env.TRADELOCKER_API_URL = creds.apiUrl;
+      await tradelocker.getAccessToken();
+      this.connected = true;
+      return { ok: true, message: "Connected to TradeLocker" };
+    } catch (err) {
+      return { ok: false, message: String(err) };
+    }
+  }
+
+  isConnected(): boolean { return this.connected; }
+  async placeOrder(symbol: string, qty: number, action: "Buy" | "Sell"): Promise<OrderResult> { return tradelocker.placeOrder(symbol, qty, action); }
+  async getBalance(): Promise<number> { return tradelocker.getAccountBalance(); }
+  async getPositions(): Promise<Position[]> { return tradelocker.getPositions(); }
+  disconnect(): void { this.connected = false; tradelocker.clearToken(); }
+}
+
 // ── Registry Singleton ─────────────────────────────────────────────────────────
-type BrokerName = "paper" | "tradovate";
+type BrokerName = "paper" | "tradovate" | "tradelocker" | "tv-paper";
 
 const paper = new PaperBroker();
 const tradovateBroker = new TradovateBroker();
+const tradelockerBroker = new TradeLockerBroker();
 
-let activeBroker: BrokerName = "paper";
+// Auto-detect from env so the correct broker is active after every server restart
+let activeBroker: BrokerName = (() => {
+  if (process.env.TV_PAPER_ENABLED === "true") return "tv-paper";
+  if (process.env.TRADELOCKER_EMAIL) return "tradelocker";
+  if (process.env.TRADOVATE_USERNAME) return "tradovate";
+  return "paper";
+})();
 
 export async function listAll(): Promise<BrokerStatus[]> {
   return [
     {
       name: "paper",
-      connected: true,
+      connected: paper.isConnected(),
       balance: await paper.getBalance(),
       positions: await paper.getPositions(),
       connectionFields: [],
@@ -112,6 +147,16 @@ export async function listAll(): Promise<BrokerStatus[]> {
         { key: "password", label: "Password", type: "password", required: true },
         { key: "clientId", label: "Client ID", type: "text", required: true },
         { key: "clientSecret", label: "Client Secret", type: "password", required: true },
+      ],
+    },
+    {
+      name: "tradelocker",
+      connected: tradelockerBroker.isConnected(),
+      connectionFields: [
+        { key: "email", label: "Email", type: "text", required: true },
+        { key: "password", label: "Password", type: "password", required: true },
+        { key: "server", label: "Server", type: "text", required: true, placeholder: "e.g. OSP-DEMO or OSP-LIVE" },
+        { key: "apiUrl", label: "API URL (optional)", type: "text", required: false, placeholder: "https://demo.tradelocker.com/backend-service" },
       ],
     },
   ];
@@ -141,6 +186,11 @@ export async function connect(
     if (result.ok) activeBroker = "tradovate";
     return result;
   }
+  if (name === "tradelocker") {
+    const result = await tradelockerBroker.connect(creds as Parameters<typeof tradelockerBroker.connect>[0]);
+    if (result.ok) activeBroker = "tradelocker";
+    return result;
+  }
   return { ok: false, message: `Unknown broker: ${name}` };
 }
 
@@ -150,29 +200,39 @@ export function switchTo(name: BrokerName): void {
 
 export function disconnect(name: BrokerName): void {
   if (name === "tradovate") tradovateBroker.disconnect();
+  if (name === "tradelocker") tradelockerBroker.disconnect();
   if (activeBroker === name) activeBroker = "paper";
 }
 
 export async function placeOrder(
   symbol: string,
   qty: number,
-  action: "Buy" | "Sell"
+  action: "Buy" | "Sell",
+  options: TVOrderOptions = {}
 ): Promise<OrderResult> {
-  if (process.env.PAPER_MODE === "true") {
-    return paper.placeOrder(symbol, qty, action);
-  }
+  if (activeBroker === "tv-paper") return tvPaper.placeTVPaperOrder(symbol, action, options);
+  if (process.env.PAPER_MODE === "true") return paper.placeOrder(symbol, qty, action);
   if (activeBroker === "tradovate") return tradovateBroker.placeOrder(symbol, qty, action);
+  if (activeBroker === "tradelocker") return tradelockerBroker.placeOrder(symbol, qty, action);
   return paper.placeOrder(symbol, qty, action);
 }
 
 export async function closePosition(symbol: string): Promise<OrderResult> {
+  if (activeBroker === "tv-paper") return tvPaper.placeTVPaperOrder(symbol, "Sell");
   if (process.env.PAPER_MODE === "true") return paper.closePosition(symbol);
   if (activeBroker === "tradovate") return tradovateBroker.closePosition(symbol);
+  if (activeBroker === "tradelocker") return tradelockerBroker.placeOrder(symbol, 0, "Sell");
   return paper.closePosition(symbol);
 }
 
 export async function getActiveStatus(): Promise<{ name: string; balance: number; positions: Position[] }> {
-  const broker = activeBroker === "tradovate" ? tradovateBroker : paper;
+  if (activeBroker === "tv-paper") {
+    return { name: "tv-paper", balance: 0, positions: [] };
+  }
+  const broker =
+    activeBroker === "tradovate" ? tradovateBroker :
+    activeBroker === "tradelocker" ? tradelockerBroker :
+    paper;
   return {
     name: activeBroker,
     balance: await broker.getBalance(),

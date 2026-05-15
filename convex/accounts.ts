@@ -47,7 +47,7 @@ export const create = mutation({
     dailyLossLimit: v.number(),
     maxDrawdownPct: v.number(),
     maxContracts: v.number(),
-    broker: v.union(v.literal("paper"), v.literal("tradovate"), v.literal("ibkr")),
+    broker: v.union(v.literal("paper"), v.literal("tradovate"), v.literal("ibkr"), v.literal("tradelocker")),
   },
   handler: async (ctx, args) => {
     // deactivate existing accounts for this user
@@ -95,6 +95,26 @@ export const updateBalance = mutation({
     if (!acc) return;
     const peakBalance = Math.max(acc.peakBalance, newBalance);
     await ctx.db.patch(accountId, { currentBalance: newBalance, dailyPnl, totalPnl, peakBalance });
+  },
+});
+
+export const resetBalance = mutation({
+  args: { userId: v.string(), balance: v.number() },
+  handler: async (ctx, { userId, balance }) => {
+    const accounts = await ctx.db
+      .query("accounts")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect();
+    for (const acc of accounts) {
+      await ctx.db.patch(acc._id, {
+        currentBalance: balance,
+        startingBalance: balance,
+        dailyPnl: 0,
+        totalPnl: 0,
+        peakBalance: balance,
+      });
+    }
+    return accounts.length;
   },
 });
 

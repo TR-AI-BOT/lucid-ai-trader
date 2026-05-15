@@ -70,7 +70,7 @@ export default defineSchema({
     dailyLossLimit: v.number(),
     maxDrawdownPct: v.number(),
     maxContracts: v.number(),
-    broker: v.union(v.literal("paper"), v.literal("tradovate"), v.literal("ibkr")),
+    broker: v.union(v.literal("paper"), v.literal("tradovate"), v.literal("ibkr"), v.literal("tradelocker")),
     isActive: v.boolean(),
     autonomousMode: v.boolean(),
     peakBalance: v.number(),
@@ -121,5 +121,18 @@ export default defineSchema({
     ),
     isPaused: v.boolean(),
     updatedAt: v.number(),
+  }).index("by_user", ["userId"]),
+
+  userSettings: defineTable({
+    userId: v.string(),
+    tvEmail: v.optional(v.string()),
+    tvPassword: v.optional(v.string()),
+    tvUsername: v.optional(v.string()),
+    tvConnected: v.optional(v.boolean()),
+    tlEmail: v.optional(v.string()),
+    tlPassword: v.optional(v.string()),
+    tlServer: v.optional(v.string()),
+    tlApiUrl: v.optional(v.string()),
+    tlConnected: v.optional(v.boolean()),
   }).index("by_user", ["userId"]),
 });

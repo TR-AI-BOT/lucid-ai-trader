@@ -31,6 +31,10 @@ export const YF_SYMBOL_MAP: Record<string, string> = {
   "GBPJPY": "GBPJPY=X",
   "BTCUSD": "BTC-USD",
   "ETHUSD": "ETH-USD",
+  // TradeLocker direct symbols
+  "NAS100.R": "NQ=F",
+  "SPX500.R": "ES=F",
+  "US30.R":   "YM=F",
 };
 
 export const YF_INTERVAL_MAP: Record<string, string> = {
@@ -56,15 +60,44 @@ const LOOKBACK_SECONDS: Record<string, number> = {
   "1d":  100 * 24 * 60 * 60 * 1.5,
 };
 
-// Returns the Unix timestamp for today's US regular session open (9:30 AM ET = 13:30 UTC)
-function todaySessionStart(): number {
+// Get current time in New York / Eastern Time (handles EST and EDT automatically)
+export function getNYTime(): { day: number; hours: number; minutes: number; dateStr: string } {
   const now = new Date();
-  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 13, 30, 0));
-  // If we're before 9:30 AM ET today, use yesterday's session
-  if (Date.now() < d.getTime()) {
-    d.setUTCDate(d.getUTCDate() - 1);
-  }
-  return Math.floor(d.getTime() / 1000);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+
+  const get = (type: string) => parts.find(p => p.type === type)?.value ?? "0";
+  const dayMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+
+  let hours = parseInt(get("hour"));
+  if (hours === 24) hours = 0; // Intl sometimes returns 24 for midnight
+
+  return {
+    day: dayMap[get("weekday")] ?? 1,
+    hours,
+    minutes: parseInt(get("minute")),
+    dateStr: `${get("year")}-${get("month")}-${get("day")}`,
+  };
+}
+
+// Returns the Unix timestamp for today's NY session open (9:30 AM ET)
+function todaySessionStart(): number {
+  const { dateStr } = getNYTime();
+  // Parse the NY date and build 9:30 AM ET as a UTC timestamp
+  const [year, month, day] = dateStr.split("-").map(Number);
+  // Create a date string at 09:30 ET — let the browser/Node resolve the offset
+  const d = new Date(`${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}T09:30:00`);
+  // Adjust: subtract the NY offset from UTC so we get the correct UTC epoch for 9:30 AM ET
+  const nyOffset = new Date(d.toLocaleString("en-US", { timeZone: "America/New_York" })).getTime() - d.getTime();
+  return Math.floor((d.getTime() - nyOffset) / 1000);
 }
 
 export async function fetchLiveCandles(symbol: string, timeframe: string): Promise<Candle[]> {
@@ -114,23 +147,32 @@ export async function fetchLiveCandles(symbol: string, timeframe: string): Promi
     .filter(c => c.close > 0);
 }
 
+// Regular session: 9:30 AM – 4:00 PM New York time, Mon–Fri
 export function isMarketHours(): boolean {
-  const now = new Date();
-  const day = now.getUTCDay(); // 0=Sun 6=Sat
-  if (day === 0 || day === 6) return false;
-  const mins = now.getUTCHours() * 60 + now.getUTCMinutes();
-  return mins >= 13 * 60 + 30 && mins < 20 * 60; // 9:30–4:00 PM ET
+  const { day, hours, minutes } = getNYTime();
+  if (day === 0 || day === 6) return false; // weekend
+  const mins = hours * 60 + minutes;
+  return mins >= 9 * 60 + 30 && mins < 16 * 60; // 9:30 AM – 4:00 PM ET
 }
 
-// Returns true if this timeframe's window is due to run (cron fires every 5 min)
+// All strategies run every 5 minutes during market hours.
+// Only daily strategies are gated to the market-open window.
 export function isTimeframeDue(timeframe: string): boolean {
-  const now = new Date();
-  const mins = now.getUTCHours() * 60 + now.getUTCMinutes();
-  switch (timeframe) {
-    case "5m":  return true;
-    case "15m": return mins % 15 < 5;
-    case "1h":  return mins % 60 < 5;
-    case "1d":  return mins >= 570 && mins < 575; // 9:30–9:35 AM ET (market open)
-    default:    return false;
+  if (timeframe === "1d") {
+    const { hours, minutes } = getNYTime();
+    const mins = hours * 60 + minutes;
+    return mins >= 9 * 60 + 30 && mins < 9 * 60 + 35; // 9:30–9:35 AM ET only
   }
+  return true; // 5m, 15m, 1h — always scan during market hours
+}
+
+// Human-readable New York time string (for logs)
+export function nyTimeString(): string {
+  return new Date().toLocaleString("en-US", {
+    timeZone: "America/New_York",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+  }) + " ET";
 }

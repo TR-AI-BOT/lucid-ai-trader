@@ -63,6 +63,18 @@ export const updateStatus = mutation({
   },
 });
 
+export const deleteAll = mutation({
+  args: { userId: v.string() },
+  handler: async (ctx, { userId }) => {
+    const signals = await ctx.db
+      .query("signals")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect();
+    for (const signal of signals) await ctx.db.delete(signal._id);
+    return signals.length;
+  },
+});
+
 export const getPerformance = query({
   args: { userId: v.string() },
   handler: async (ctx, { userId }) => {

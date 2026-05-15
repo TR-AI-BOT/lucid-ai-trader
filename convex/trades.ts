@@ -59,7 +59,6 @@ export const getPnlStats = query({
     const allTrades = await ctx.db
       .query("trades")
       .withIndex("by_user", (q) => q.eq("userId", userId))
-      .filter((q) => q.eq(q.field("status"), "closed"))
       .collect();
 
     let trades = allTrades;
@@ -77,16 +76,19 @@ export const getPnlStats = query({
       trades = allTrades.filter((t) => t.executedAt >= start.getTime());
     }
 
-    const wins = trades.filter((t) => (t.pnl ?? 0) > 0);
-    const losses = trades.filter((t) => (t.pnl ?? 0) <= 0);
+    const closed = trades.filter((t) => t.status === "closed");
+    const wins = closed.filter((t) => (t.pnl ?? 0) > 0);
+    const losses = closed.filter((t) => (t.pnl ?? 0) <= 0);
     const grossProfit = wins.reduce((sum, t) => sum + (t.pnl ?? 0), 0);
     const grossLoss = Math.abs(losses.reduce((sum, t) => sum + (t.pnl ?? 0), 0));
 
     return {
       totalTrades: trades.length,
+      openTrades: trades.length - closed.length,
+      closedTrades: closed.length,
       wins: wins.length,
       losses: losses.length,
-      winRate: trades.length > 0 ? wins.length / trades.length : 0,
+      winRate: closed.length > 0 ? wins.length / closed.length : 0,
       grossProfit,
       grossLoss,
       netPnl: grossProfit - grossLoss,
@@ -94,6 +96,95 @@ export const getPnlStats = query({
       avgLoss: losses.length > 0 ? grossLoss / losses.length : 0,
       profitFactor: grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 999 : 0,
     };
+  },
+});
+
+export const getAllStrategyStats = query({
+  args: { userId: v.string(), dateRange: v.optional(v.string()) },
+  handler: async (ctx, { userId, dateRange }) => {
+    const allTrades = await ctx.db
+      .query("trades")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect();
+
+    let trades = allTrades;
+    const now = Date.now();
+    if (dateRange === "today") {
+      const start = new Date(); start.setHours(0, 0, 0, 0);
+      trades = allTrades.filter(t => t.executedAt >= start.getTime());
+    } else if (dateRange === "week") {
+      trades = allTrades.filter(t => t.executedAt >= now - 7 * 24 * 3600 * 1000);
+    } else if (dateRange === "month") {
+      trades = allTrades.filter(t => t.executedAt >= now - 30 * 24 * 3600 * 1000);
+    }
+
+    const byStrategy = new Map<string, typeof trades>();
+    for (const t of trades) {
+      const key = (!t.strategy || t.strategy === "unknown") ? "manual" : t.strategy;
+      if (!byStrategy.has(key)) byStrategy.set(key, []);
+      byStrategy.get(key)!.push(t);
+    }
+
+    const results = [];
+    for (const [strategy, st] of byStrategy) {
+      const wins = st.filter(t => (t.pnl ?? 0) > 0);
+      const losses = st.filter(t => (t.pnl ?? 0) <= 0);
+      const grossProfit = wins.reduce((s, t) => s + (t.pnl ?? 0), 0);
+      const grossLoss = Math.abs(losses.reduce((s, t) => s + (t.pnl ?? 0), 0));
+      results.push({
+        strategy,
+        totalTrades: st.length,
+        wins: wins.length,
+        losses: losses.length,
+        winRate: st.length > 0 ? wins.length / st.length : 0,
+        netPnl: grossProfit - grossLoss,
+        grossProfit,
+        grossLoss,
+        avgWin: wins.length > 0 ? grossProfit / wins.length : 0,
+        avgLoss: losses.length > 0 ? grossLoss / losses.length : 0,
+        profitFactor: grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 999 : 0,
+      });
+    }
+    return results.sort((a, b) => b.netPnl - a.netPnl);
+  },
+});
+
+export const getCumulativePnl = query({
+  args: { userId: v.string(), dateRange: v.optional(v.string()) },
+  handler: async (ctx, { userId, dateRange }) => {
+    const allTrades = await ctx.db
+      .query("trades")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect();
+
+    let trades = [...allTrades].sort((a, b) => a.executedAt - b.executedAt);
+    const now = Date.now();
+    if (dateRange === "today") {
+      const start = new Date(); start.setHours(0, 0, 0, 0);
+      trades = trades.filter(t => t.executedAt >= start.getTime());
+    } else if (dateRange === "week") {
+      trades = trades.filter(t => t.executedAt >= now - 7 * 24 * 3600 * 1000);
+    } else if (dateRange === "month") {
+      trades = trades.filter(t => t.executedAt >= now - 30 * 24 * 3600 * 1000);
+    }
+
+    let cumulative = 0;
+    return trades.map(t => {
+      cumulative += (t.pnl ?? 0);
+      return { time: t.executedAt, pnl: Math.round(cumulative * 100) / 100 };
+    });
+  },
+});
+
+export const deleteAll = mutation({
+  args: { userId: v.string() },
+  handler: async (ctx, { userId }) => {
+    const trades = await ctx.db
+      .query("trades")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect();
+    for (const trade of trades) await ctx.db.delete(trade._id);
+    return trades.length;
   },
 });
 

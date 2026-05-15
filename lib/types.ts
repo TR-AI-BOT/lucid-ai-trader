@@ -10,6 +10,8 @@ export interface TradingSignal {
   reason: string;
   strategy?: string;
   confidence?: number;
+  stopLoss?: number;
+  takeProfit?: number;
 }
 
 // ── Strategy Result ────────────────────────────────────────────────────────────
@@ -76,6 +78,7 @@ export interface Account {
   broker: "paper" | "tradovate" | "ibkr";
   isActive: boolean;
   autonomousMode: boolean;
+  peakBalance?: number;
 }
 
 // ── Broker ─────────────────────────────────────────────────────────────────────
@@ -108,6 +111,7 @@ export interface ConnectionField {
   label: string;
   type: "text" | "password";
   required: boolean;
+  placeholder?: string;
 }
 
 // ── P&L Stats ──────────────────────────────────────────────────────────────────

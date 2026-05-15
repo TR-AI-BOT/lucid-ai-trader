@@ -3,6 +3,7 @@
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useCurrentUserId } from "@/hooks/useCurrentUserId";
+import { usePortfolioPnl } from "@/hooks/usePortfolioPnl";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -29,10 +30,9 @@ interface Props {
 
 export function Sidebar({ activeView, onViewChange }: Props) {
   const userId = useCurrentUserId();
-
   const state = useQuery(api.tradingState.get, userId ? { userId } : "skip");
-  const pnlStats = useQuery(api.trades.getPnlStats, userId ? { userId, dateRange: "today" } : "skip");
   const setPaused = useMutation(api.tradingState.setPaused);
+  const { pnlStats, totalPnl, openCount, tvBalance, tvRealizedPnl, tvUnrealizedPnl } = usePortfolioPnl("today");
 
   const isPaused = state?.isPaused ?? false;
 
@@ -42,18 +42,34 @@ export function Sidebar({ activeView, onViewChange }: Props) {
       <div className="px-3 mb-2">
         <div className="glass rounded-xl p-3 space-y-2">
           <div className="flex justify-between text-xs">
-            <span className="text-muted-foreground">Net P&L</span>
-            <span className={cn("font-semibold tabular-nums", (pnlStats?.netPnl ?? 0) >= 0 ? "text-buy" : "text-sell")}>
-              {(pnlStats?.netPnl ?? 0) >= 0 ? "+" : ""}${(pnlStats?.netPnl ?? 0).toFixed(2)}
+            <span className="text-muted-foreground">Realized P&L</span>
+            <span className={cn("font-semibold tabular-nums", (tvRealizedPnl ?? 0) >= 0 ? "text-buy" : "text-sell")}>
+              {tvRealizedPnl !== null ? `${tvRealizedPnl >= 0 ? "+" : ""}$${tvRealizedPnl.toFixed(2)}` : "—"}
             </span>
           </div>
           <div className="flex justify-between text-xs">
-            <span className="text-muted-foreground">Win Rate</span>
-            <span className="font-medium">{((pnlStats?.winRate ?? 0) * 100).toFixed(0)}%</span>
+            <span className="text-muted-foreground">Unrealized P&L</span>
+            <span className={cn("font-semibold tabular-nums", (tvUnrealizedPnl ?? 0) >= 0 ? "text-buy" : "text-sell")}>
+              {tvUnrealizedPnl !== null ? `${tvUnrealizedPnl >= 0 ? "+" : ""}$${tvUnrealizedPnl.toFixed(2)}` : "—"}
+            </span>
+          </div>
+          <div className="flex justify-between text-xs">
+            <span className="text-muted-foreground">Total P&L</span>
+            <span className={cn("font-semibold tabular-nums", totalPnl >= 0 ? "text-buy" : "text-sell")}>
+              {tvRealizedPnl !== null ? `${totalPnl >= 0 ? "+" : ""}$${totalPnl.toFixed(2)}` : "—"}
+            </span>
           </div>
           <div className="flex justify-between text-xs">
             <span className="text-muted-foreground">Trades</span>
             <span className="font-medium">{pnlStats?.totalTrades ?? 0}</span>
+          </div>
+          <div className="flex justify-between text-xs pt-1 border-t border-border/50">
+            <span className="text-muted-foreground">TV Balance</span>
+            <span className="font-semibold tabular-nums text-foreground">
+              {tvBalance !== null
+                ? `$${tvBalance.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                : "—"}
+            </span>
           </div>
         </div>
       </div>

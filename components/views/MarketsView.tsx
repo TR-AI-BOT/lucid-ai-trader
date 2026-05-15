@@ -1,9 +1,15 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useConvexAuth, useMutation, useQuery } from "convex/react";
+import { api } from "@/convex/_generated/api";
 import { cn } from "@/lib/utils";
 
 const AVAILABLE_PAIRS = [
+  // TradeLocker Direct
+  { symbol: "NAS100.R", label: "Nasdaq 100 (TradeLocker)", category: "TradeLocker" },
+  { symbol: "SPX500.R", label: "S&P 500 (TradeLocker)", category: "TradeLocker" },
+  { symbol: "US30.R",   label: "Dow Jones 30 (TradeLocker)", category: "TradeLocker" },
   // Micro Futures
   { symbol: "MES1!", label: "Micro E-mini S&P 500", category: "Futures" },
   { symbol: "MNQ1!", label: "Micro Nasdaq", category: "Futures" },
@@ -68,61 +74,64 @@ const AVAILABLE_PAIRS = [
   { symbol: "ETHUSD", label: "Ethereum / USD", category: "Crypto" },
 ];
 
-const CATEGORIES = ["Futures", "ETF", "Stocks", "Forex", "Crypto"];
-const STORAGE_KEY = "lucid_tradeable_pairs";
+const CATEGORIES = ["TradeLocker", "Futures", "ETF", "Stocks", "Forex", "Crypto"];
 
 const DEFAULT_ENABLED = new Set([
+  "NAS100.R", "SPX500.R", "US30.R",
   "MES1!", "MNQ1!", "M2K1!", "MYM1!", "ES1!", "NQ1!", "SPY", "QQQ",
 ]);
 
-function loadEnabled(): Set<string> {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return new Set(JSON.parse(raw));
-  } catch {}
-  return new Set(DEFAULT_ENABLED);
-}
-
-function saveEnabled(set: Set<string>) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(Array.from(set)));
-  } catch {}
-}
+const AUTONOMOUS_USER_ID = process.env.NEXT_PUBLIC_AUTONOMOUS_USER_ID ?? "m17ap1ehn4419nyj1e6w93a08986m0pc";
 
 export function MarketsView() {
-  const [enabled, setEnabled] = useState<Set<string>>(new Set());
-  const [loaded, setLoaded] = useState(false);
+  const { isAuthenticated } = useConvexAuth();
+  const userId = AUTONOMOUS_USER_ID;
 
+  const savedPairs = useQuery(
+    api.tradeablePairs.getAll,
+    isAuthenticated ? { userId } : "skip"
+  );
+
+  const setEnabled = useMutation(api.tradeablePairs.setEnabled);
+  const setMany = useMutation(api.tradeablePairs.setMany);
+
+  const [enabled, setEnabledLocal] = useState<Set<string>>(new Set(DEFAULT_ENABLED));
+  const [synced, setSynced] = useState(false);
+
+  // Sync from Convex on first load
   useEffect(() => {
-    setEnabled(loadEnabled());
-    setLoaded(true);
-  }, []);
+    if (savedPairs === undefined || synced) return;
+    if (savedPairs.length === 0) {
+      // First time: push defaults to Convex
+      setMany({ userId, symbols: Array.from(DEFAULT_ENABLED), enabled: true });
+      setSynced(true);
+    } else {
+      const fromDb = new Set(savedPairs.filter(p => p.enabled).map(p => p.symbol));
+      setEnabledLocal(fromDb);
+      setSynced(true);
+    }
+  }, [savedPairs, synced, setMany, userId]);
 
-  function toggle(symbol: string) {
-    setEnabled((prev) => {
+  async function toggle(symbol: string) {
+    const isOn = enabled.has(symbol);
+    setEnabledLocal((prev) => {
       const next = new Set(prev);
-      if (next.has(symbol)) {
-        next.delete(symbol);
-      } else {
-        next.add(symbol);
-      }
-      saveEnabled(next);
+      isOn ? next.delete(symbol) : next.add(symbol);
       return next;
     });
+    await setEnabled({ userId, symbol, enabled: !isOn });
   }
 
-  function enableAll() {
-    const all = new Set(AVAILABLE_PAIRS.map((p) => p.symbol));
-    setEnabled(all);
-    saveEnabled(all);
+  async function enableAll() {
+    const all = AVAILABLE_PAIRS.map(p => p.symbol);
+    setEnabledLocal(new Set(all));
+    await setMany({ userId, symbols: all, enabled: true });
   }
 
-  function disableAll() {
-    setEnabled(new Set());
-    saveEnabled(new Set());
+  async function disableAll() {
+    setEnabledLocal(new Set());
+    await setMany({ userId, symbols: AVAILABLE_PAIRS.map(p => p.symbol), enabled: false });
   }
-
-  if (!loaded) return null;
 
   return (
     <div className="space-y-4">
@@ -150,14 +159,14 @@ export function MarketsView() {
             <h3 className="text-sm font-semibold text-muted-foreground">{cat}</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
               {catPairs.map(({ symbol, label }) => {
-                const isEnabled = enabled.has(symbol);
+                const isOn = enabled.has(symbol);
                 return (
                   <button
                     key={symbol}
                     onClick={() => toggle(symbol)}
                     className={cn(
                       "flex items-center justify-between px-3 py-2.5 rounded-xl border text-left transition-all",
-                      isEnabled
+                      isOn
                         ? "bg-primary/10 border-primary/40 text-foreground"
                         : "bg-white/3 border-border text-muted-foreground hover:border-border/60 hover:text-foreground"
                     )}
@@ -168,7 +177,7 @@ export function MarketsView() {
                     </div>
                     <div className={cn(
                       "w-4 h-4 rounded-full border-2 flex-none transition-colors ml-2",
-                      isEnabled ? "bg-primary border-primary" : "border-muted-foreground/40"
+                      isOn ? "bg-primary border-primary" : "border-muted-foreground/40"
                     )} />
                   </button>
                 );

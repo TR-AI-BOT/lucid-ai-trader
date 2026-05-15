@@ -57,7 +57,10 @@ export async function routeSignal(
     return { action: "executed", reason: result.message, orderId: result.orderId };
   }
 
-  const result = await brokerRegistry.placeOrder(signal.symbol, qty, brokerAction);
+  const result = await brokerRegistry.placeOrder(signal.symbol, qty, brokerAction, {
+    stopLoss: signal.stopLoss,
+    takeProfit: signal.takeProfit,
+  });
   if (result.ok) {
     await telegram.sendTradeAlert(signal.action, signal.symbol, qty, signal.price);
   }

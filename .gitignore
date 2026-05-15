@@ -36,3 +36,15 @@ Thumbs.db
 
 # clerk configuration (can include secrets)
 /.clerk/
+
+.vercel
+
+# Local-only tools and scripts
+.claude/
+.mcp.json
+tradingview-mcp/
+launch-tradingview.bat
+
+# Local database and build cache
+trade_journal.db
+tsconfig.tsbuildinfo

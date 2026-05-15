@@ -8,10 +8,13 @@ import type { TradingSignal, Account, TradingMode } from "./types";
 
 const convex = new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL!);
 
-// Default pairs — override with TRADEABLE_PAIRS env var (comma-separated)
-const DEFAULT_PAIRS = ["MES1!", "MNQ1!", "ES1!", "NQ1!", "SPY", "QQQ"];
+const DEFAULT_PAIRS = ["NAS100.R", "SPX500.R", "US30.R", "MES1!", "MNQ1!", "ES1!", "NQ1!"];
 
-function getEnabledPairs(): string[] {
+async function getEnabledPairs(userId: string): Promise<string[]> {
+  try {
+    const pairs = await convex.query(api.tradeablePairs.getEnabled, { userId });
+    if (pairs && pairs.length > 0) return pairs;
+  } catch {}
   const env = process.env.TRADEABLE_PAIRS;
   if (env) return env.split(",").map(p => p.trim()).filter(Boolean);
   return DEFAULT_PAIRS;
@@ -24,7 +27,7 @@ export interface EngineResult {
   signalsRouted: number;
 }
 
-export async function runAutonomousEngine(userId: string): Promise<EngineResult> {
+export async function runAutonomousEngine(userId: string, force = false): Promise<EngineResult> {
   // Load trading state and account in parallel
   const [tradingState, account] = await Promise.all([
     convex.query(api.tradingState.get, { userId }),
@@ -36,6 +39,11 @@ export async function runAutonomousEngine(userId: string): Promise<EngineResult>
   }
   if (!account) {
     return { skipped: "No active account", timeframesRan: [], signalsFound: 0, signalsRouted: 0 };
+  }
+
+  // All strategies require NY market hours (9:30 AM – 4:00 PM ET, Mon–Fri)
+  if (!force && !isMarketHours()) {
+    return { skipped: "Market closed (NY time)", timeframesRan: [], signalsFound: 0, signalsRouted: 0 };
   }
 
   // Which strategy IDs are enabled for this user
@@ -54,7 +62,7 @@ export async function runAutonomousEngine(userId: string): Promise<EngineResult>
     byTimeframe.get(s.timeframe)!.push(s.id);
   }
 
-  const pairs = getEnabledPairs();
+  const pairs = await getEnabledPairs(userId);
   const timeframesRan: string[] = [];
 
   // symbol → best signal found
@@ -62,9 +70,7 @@ export async function runAutonomousEngine(userId: string): Promise<EngineResult>
   const best = new Map<string, SignalEntry>();
 
   for (const [timeframe, strategyIds] of byTimeframe) {
-    if (!isTimeframeDue(timeframe)) continue;
-    // 5m strategies only run during regular market hours
-    if (timeframe === "5m" && !isMarketHours()) continue;
+    if (!force && !isTimeframeDue(timeframe)) continue;
 
     timeframesRan.push(timeframe);
 
@@ -117,6 +123,8 @@ export async function runAutonomousEngine(userId: string): Promise<EngineResult>
       reason: signal.reason,
       strategy: strategyId,
       confidence: signal.confidence,
+      stopLoss: signal.stopPrice > 0 ? signal.stopPrice : undefined,
+      takeProfit: signal.target1 > 0 ? signal.target1 : undefined,
     };
 
     const signalId = await convex.mutation(api.signals.add, {
@@ -145,6 +153,46 @@ export async function runAutonomousEngine(userId: string): Promise<EngineResult>
       result.action === "signal_only"      ? "filtered"  : "filtered";
 
     await convex.mutation(api.signals.updateStatus, { signalId, status: finalStatus });
+
+    if (result.action === "executed") {
+      const tradeQty = parseInt(process.env.ORDER_QTY ?? "1", 10);
+      const acc = account as unknown as { _id: string; currentBalance: number; dailyPnl: number; totalPnl: number };
+
+      if (tradingSignal.action === "CLOSE") {
+        // Find and close the matching open trade, update account balance
+        const openTrades = await convex.query(api.trades.list, { userId, status: "open" });
+        const openTrade = openTrades.find(t => t.symbol === symbol);
+        if (openTrade) {
+          const exitPrice = signal.entryPrice;
+          const pnl = Math.round(
+            (openTrade.side === "Long"
+              ? (exitPrice - openTrade.entryPrice) * openTrade.qty
+              : (openTrade.entryPrice - exitPrice) * openTrade.qty) * 100
+          ) / 100;
+          await convex.mutation(api.trades.close, {
+            tradeId: openTrade._id,
+            exitPrice,
+            pnl,
+          });
+          await convex.mutation(api.accounts.updateBalance, {
+            accountId: acc._id as Parameters<typeof convex.mutation<typeof api.accounts.updateBalance>>[1]["accountId"],
+            newBalance: Math.round((acc.currentBalance + pnl) * 100) / 100,
+            dailyPnl: Math.round((acc.dailyPnl + pnl) * 100) / 100,
+            totalPnl: Math.round((acc.totalPnl + pnl) * 100) / 100,
+          });
+        }
+      } else {
+        await convex.mutation(api.trades.add, {
+          userId,
+          accountId: acc._id,
+          symbol,
+          side: tradingSignal.action === "BUY" ? "Long" : "Short",
+          qty: tradeQty,
+          entryPrice: signal.entryPrice,
+          strategy: strategyId,
+        });
+      }
+    }
 
     dailyCount++;
     signalsRouted++;

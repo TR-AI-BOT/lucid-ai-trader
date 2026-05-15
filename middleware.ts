@@ -10,6 +10,12 @@ const isPublicRoute = createRouteMatcher([
   "/login(.*)",
   "/api/webhook/tradingview(.*)",
   "/api/telegram/webhook(.*)",
+  "/api/engine/run(.*)",
+  "/api/status(.*)",
+  "/api/debug(.*)",
+  "/api/tv/balance(.*)",
+  "/api/tv/account(.*)",
+  "/api/setup(.*)",
 ]);
 
 export default convexAuthNextjsMiddleware(async (request) => {

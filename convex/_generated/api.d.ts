@@ -15,8 +15,10 @@ import type * as http from "../http.js";
 import type * as pairs from "../pairs.js";
 import type * as signals from "../signals.js";
 import type * as strategies from "../strategies.js";
+import type * as tradeablePairs from "../tradeablePairs.js";
 import type * as trades from "../trades.js";
 import type * as tradingState from "../tradingState.js";
+import type * as userSettings from "../userSettings.js";
 import type * as users from "../users.js";
 
 import type {
@@ -33,8 +35,10 @@ declare const fullApi: ApiFromModules<{
   pairs: typeof pairs;
   signals: typeof signals;
   strategies: typeof strategies;
+  tradeablePairs: typeof tradeablePairs;
   trades: typeof trades;
   tradingState: typeof tradingState;
+  userSettings: typeof userSettings;
   users: typeof users;
 }>;
 
