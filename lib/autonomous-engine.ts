@@ -109,7 +109,7 @@ export async function runAutonomousEngine(userId: string, force = false): Promis
     .slice(0, 3);
 
   const performance = await convex.query(api.signals.getPerformance, { userId });
-  let dailyCount = performance.total;
+  let dailyCount = performance.executed; // Only count actually executed trades toward the daily cap
   let signalsRouted = 0;
 
   for (const [symbol, entry] of symbolsByEntry) {

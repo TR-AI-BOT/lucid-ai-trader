@@ -78,18 +78,24 @@ export const deleteAll = mutation({
 export const getPerformance = query({
   args: { userId: v.string() },
   handler: async (ctx, { userId }) => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    // NY midnight: UTC offset is -5 (EST) or -4 (EDT); use -5 as conservative floor
+    const nowUtc = Date.now();
+    const nyMidnightUtc = new Date(
+      new Date(nowUtc).toLocaleDateString("en-US", { timeZone: "America/New_York" }) +
+        "T00:00:00-05:00"
+    ).getTime();
     const signals = await ctx.db
       .query("signals")
       .withIndex("by_user", (q) => q.eq("userId", userId))
-      .filter((q) => q.gte(q.field("receivedAt"), today.getTime()))
+      .filter((q) => q.gte(q.field("receivedAt"), nyMidnightUtc))
       .collect();
+    const executed = signals.filter((s) => s.status === "executed").length;
     return {
       buy: signals.filter((s) => s.action === "BUY").length,
       sell: signals.filter((s) => s.action === "SELL").length,
       close: signals.filter((s) => s.action === "CLOSE").length,
       filtered: signals.filter((s) => s.status === "filtered").length,
+      executed,
       total: signals.length,
     };
   },
