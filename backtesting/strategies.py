@@ -270,6 +270,98 @@ def orb_strategy(df: pd.DataFrame, **p) -> List[Signal]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# 1b. ORB BREAKOUT & RETEST
+# ═══════════════════════════════════════════════════════════════════════════════
+@_register("orb_retest", "ORB Breakout & Retest",
+           "30-min opening range; wait for breakout, then retest of level, then re-entry.",
+           ["futures", "stocks"])
+def orb_retest_strategy(df: pd.DataFrame, **p) -> List[Signal]:
+    if not _has_intraday(df):
+        return []
+    signals: List[Signal] = []
+    atr_s = _atr(df, 14)
+
+    for date, day_df in df.groupby(df.index.date):
+        rth = day_df.between_time("09:30", "16:00")
+        if len(rth) < 6:
+            continue
+        med = pd.Series(rth.index).diff().dt.total_seconds().median()
+        n_or = 1 if med >= 1800 else max(1, int(1800 // med))
+        win = rth.iloc[:n_or]
+        hi, lo = win["high"].max(), win["low"].min()
+        rng = hi - lo
+        if rng <= 0:
+            continue
+        post = rth.iloc[n_or:]
+        if len(post) < 3:
+            continue
+        fb = df.index.get_loc(post.index[0])
+        atr_v = float(atr_s.iloc[fb]) if fb < len(atr_s) and not np.isnan(atr_s.iloc[fb]) else rng
+
+        # State machine per direction: 0=waiting breakout, 1=waiting retest, 2=in trade
+        bull_state = 0   # looking for breakout above hi
+        bear_state = 0   # looking for breakout below lo
+        bull_entry = bear_entry = 0.0
+        pos = 0
+        post = post.between_time("09:30", "11:30")
+
+        for ts, row in post.iterrows():
+            bi = df.index.get_loc(ts)
+            cl = float(row["close"])
+            hi_bar = float(row["high"])
+            lo_bar = float(row["low"])
+            an = float(atr_s.iloc[bi]) if bi < len(atr_s) and not np.isnan(atr_s.iloc[bi]) else atr_v
+            tol = 0.35 * an  # retest tolerance band
+
+            # ── Manage open position ──────────────────────────────────────────
+            if pos == 1:
+                stop = bull_entry - 0.5 * rng
+                tgt  = bull_entry + rng
+                if lo_bar <= stop or hi_bar >= tgt:
+                    signals.append({"bar": bi, "action": "CLOSE", "price": cl, "reason": "ORB-RT tgt/stop"})
+                    pos = 0
+                continue
+            if pos == -1:
+                stop = bear_entry + 0.5 * rng
+                tgt  = bear_entry - rng
+                if hi_bar >= stop or lo_bar <= tgt:
+                    signals.append({"bar": bi, "action": "CLOSE", "price": cl, "reason": "ORB-RT tgt/stop"})
+                    pos = 0
+                continue
+
+            # ── Bullish state machine ─────────────────────────────────────────
+            if bull_state == 0 and cl > hi:
+                bull_state = 1  # broke out above — now wait for retest
+            elif bull_state == 1:
+                # retest: low dips into ORB hi ± tol but close stays above lo
+                if lo_bar <= hi + tol and cl >= hi - tol:
+                    # retest confirmed — enter long
+                    signals.append({"bar": bi, "action": "BUY", "price": cl,
+                                    "reason": f"ORB-RT long retest {hi:.2f}"})
+                    pos, bull_entry, bull_state = 1, cl, 2
+                elif cl < hi - tol:
+                    # price collapsed back inside range — reset
+                    bull_state = 0
+
+            # ── Bearish state machine ─────────────────────────────────────────
+            if pos == 0 and bear_state == 0 and cl < lo:
+                bear_state = 1  # broke out below — wait for retest
+            elif pos == 0 and bear_state == 1:
+                if hi_bar >= lo - tol and cl <= lo + tol:
+                    signals.append({"bar": bi, "action": "SELL", "price": cl,
+                                    "reason": f"ORB-RT short retest {lo:.2f}"})
+                    pos, bear_entry, bear_state = -1, cl, 2
+                elif cl > lo + tol:
+                    bear_state = 0
+
+        if pos != 0:
+            lb2 = df.index.get_loc(rth.index[-1])
+            signals.append({"bar": lb2, "action": "CLOSE",
+                            "price": float(rth["close"].iloc[-1]), "reason": "EOD"})
+    return signals
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # 2. BREAK & RETEST  (1H)
 # ═══════════════════════════════════════════════════════════════════════════════
 @_register("break_retest", "Break & Retest",
@@ -498,6 +590,293 @@ def fvg_strategy(df: pd.DataFrame, **p) -> List[Signal]:
                     z["mit"] = True
                 elif z["dir"] == -1 and C[i] > z["hi"]:
                     z["mit"] = True
+    _eod(signals, pos, n, float(C[-1]))
+    return signals
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 5b. FVG STRICT — EMA200 trend + kill-zone filtered version
+# ═══════════════════════════════════════════════════════════════════════════════
+@_register("fvg_strict", "FVG Strict (EMA200+KZ)",
+           "FVG with EMA200 trend alignment + kill zone + volume gate.",
+           ["futures", "stocks", "forex"])
+def fvg_strict_strategy(df: pd.DataFrame, **p) -> List[Signal]:
+    signals: List[Signal] = []
+    atr_s  = _atr(df, 14)
+    ema200 = _ema(df["close"], 200)
+    vol_r  = _vol_ratio(df, 20)
+    H, L, C, O = df["high"].values, df["low"].values, df["close"].values, df["open"].values
+    n     = len(df)
+    intra = _has_intraday(df)
+    sh    = _swing_high_idx(df, 5)
+    sl    = _swing_low_idx(df, 5)
+    pos, entry, stop_p, tgt_p = 0, 0.0, 0.0, 0.0
+    zones: List[Dict] = []
+
+    for i in range(2, n):
+        ts    = df.index[i]
+        atr_v = float(atr_s.iloc[i]) if not np.isnan(atr_s.iloc[i]) else 1.0
+        pr    = float(C[i])
+        if pos == 1 and (pr <= stop_p or pr >= tgt_p):
+            signals.append({"bar": i, "action": "CLOSE", "price": pr, "reason": "FVG-S exit"}); pos = 0
+        elif pos == -1 and (pr >= stop_p or pr <= tgt_p):
+            signals.append({"bar": i, "action": "CLOSE", "price": pr, "reason": "FVG-S exit"}); pos = 0
+
+        body = abs(C[i - 1] - O[i - 1])
+        if body > 1.5 * atr_v:
+            if L[i] > H[i - 2]:
+                zones.append({"dir": 1, "lo": float(H[i - 2]), "hi": float(L[i]), "born": i, "mit": False})
+            elif H[i] < L[i - 2]:
+                zones.append({"dir": -1, "lo": float(H[i]), "hi": float(L[i - 2]), "born": i, "mit": False})
+
+        if pos != 0:
+            continue
+        if intra and not _is_kill_zone(ts):
+            continue
+        if float(vol_r.iloc[i]) < 1.1:
+            continue
+        e2 = float(ema200.iloc[i]) if not np.isnan(ema200.iloc[i]) else pr
+        bull_bias = pr > e2
+        bear_bias = pr < e2
+
+        for z in zones:
+            if z["mit"] or i - z["born"] > 20:
+                continue
+            mid_z = (z["lo"] + z["hi"]) / 2
+            if z["dir"] == 1 and bull_bias and L[i] <= z["hi"] and C[i] >= mid_z:
+                bull = C[i] > O[i] and (C[i] - O[i]) > 0.5 * (H[i] - L[i] or 1e-9)
+                if bull:
+                    stop_p = z["lo"] - 0.2 * atr_v
+                    above  = [H[k] for k in sh if k < i]
+                    tgt_p  = max(above[-3:]) if above else pr + 3 * atr_v
+                    signals.append({"bar": i, "action": "BUY", "price": pr, "reason": "FVG-S bull"})
+                    pos, entry = 1, pr; z["mit"] = True; break
+            elif z["dir"] == -1 and bear_bias and H[i] >= z["lo"] and C[i] <= mid_z:
+                bear = C[i] < O[i] and (O[i] - C[i]) > 0.5 * (H[i] - L[i] or 1e-9)
+                if bear:
+                    stop_p = z["hi"] + 0.2 * atr_v
+                    below  = [L[k] for k in sl if k < i]
+                    tgt_p  = min(below[-3:]) if below else pr - 3 * atr_v
+                    signals.append({"bar": i, "action": "SELL", "price": pr, "reason": "FVG-S bear"})
+                    pos, entry = -1, pr; z["mit"] = True; break
+        for z in zones:
+            if not z["mit"]:
+                if z["dir"] == 1 and C[i] < z["lo"]: z["mit"] = True
+                elif z["dir"] == -1 and C[i] > z["hi"]: z["mit"] = True
+    _eod(signals, pos, n, float(C[-1]))
+    return signals
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 5c. ICT SILVER BULLET STRICT — 10am & 2pm kill windows only
+# ═══════════════════════════════════════════════════════════════════════════════
+@_register("silver_bullet_strict", "ICT Silver Bullet (Strict)",
+           "FVG entry only in 10:00-10:59am and 2:00-2:59pm NY windows + EMA200.",
+           ["futures", "stocks"])
+def silver_bullet_strict_strategy(df: pd.DataFrame, **p) -> List[Signal]:
+    if not _has_intraday(df):
+        return []
+    signals: List[Signal] = []
+    atr_s  = _atr(df, 14)
+    ema200 = _ema(df["close"], 200)
+    H, L, C, O = df["high"].values, df["low"].values, df["close"].values, df["open"].values
+    n  = len(df)
+    sh = _swing_high_idx(df, 5)
+    sl = _swing_low_idx(df, 5)
+    pos, stop_p, tgt_p = 0, 0.0, 0.0
+
+    def _in_sb_window(ts) -> bool:
+        t = ts.time()
+        return (_time(10, 0) <= t <= _time(10, 59)) or (_time(14, 0) <= t <= _time(14, 59))
+
+    zones: List[Dict] = []
+    for i in range(2, n):
+        ts    = df.index[i]
+        atr_v = float(atr_s.iloc[i]) if not np.isnan(atr_s.iloc[i]) else 1.0
+        pr    = float(C[i])
+        if pos == 1 and (pr <= stop_p or pr >= tgt_p):
+            signals.append({"bar": i, "action": "CLOSE", "price": pr, "reason": "SB exit"}); pos = 0
+        elif pos == -1 and (pr >= stop_p or pr <= tgt_p):
+            signals.append({"bar": i, "action": "CLOSE", "price": pr, "reason": "SB exit"}); pos = 0
+
+        body = abs(C[i - 1] - O[i - 1])
+        if body > atr_v:
+            if L[i] > H[i - 2]:
+                zones.append({"dir": 1, "lo": float(H[i - 2]), "hi": float(L[i]), "born": i, "mit": False})
+            elif H[i] < L[i - 2]:
+                zones.append({"dir": -1, "lo": float(H[i]), "hi": float(L[i - 2]), "born": i, "mit": False})
+
+        if pos != 0 or not _in_sb_window(ts):
+            continue
+        e2 = float(ema200.iloc[i]) if not np.isnan(ema200.iloc[i]) else pr
+        bull_bias = pr > e2; bear_bias = pr < e2
+        for z in zones:
+            if z["mit"] or i - z["born"] > 15:
+                continue
+            mid_z = (z["lo"] + z["hi"]) / 2
+            if z["dir"] == 1 and bull_bias and L[i] <= z["hi"] and C[i] >= mid_z:
+                bull = C[i] > O[i]
+                if bull:
+                    stop_p = z["lo"] - 0.3 * atr_v
+                    above  = [H[k] for k in sh if k < i]
+                    tgt_p  = max(above[-3:]) if above else pr + 2.5 * atr_v
+                    signals.append({"bar": i, "action": "BUY", "price": pr, "reason": "SB-10am/2pm bull"})
+                    pos = 1; z["mit"] = True; break
+            elif z["dir"] == -1 and bear_bias and H[i] >= z["lo"] and C[i] <= mid_z:
+                bear = C[i] < O[i]
+                if bear:
+                    stop_p = z["hi"] + 0.3 * atr_v
+                    below  = [L[k] for k in sl if k < i]
+                    tgt_p  = min(below[-3:]) if below else pr - 2.5 * atr_v
+                    signals.append({"bar": i, "action": "SELL", "price": pr, "reason": "SB-10am/2pm bear"})
+                    pos = -1; z["mit"] = True; break
+        for z in zones:
+            if not z["mit"]:
+                if z["dir"] == 1 and C[i] < z["lo"]: z["mit"] = True
+                elif z["dir"] == -1 and C[i] > z["hi"]: z["mit"] = True
+    _eod(signals, pos, n, float(C[-1]))
+    return signals
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 5d. OTE ENTRY — Optimal Trade Entry (ICT) 61.8-79% Fibonacci after BOS
+# ═══════════════════════════════════════════════════════════════════════════════
+@_register("ote_entry", "ICT OTE Entry",
+           "BOS (swing break) → 61.8-79% Fibonacci retracement → entry in OTE zone.",
+           ["futures", "stocks", "forex"])
+def ote_entry_strategy(df: pd.DataFrame, **p) -> List[Signal]:
+    signals: List[Signal] = []
+    atr_s  = _atr(df, 14)
+    ema200 = _ema(df["close"], 200)
+    H, L, C, O = df["high"].values, df["low"].values, df["close"].values, df["open"].values
+    n  = len(df)
+    sh = _swing_high_idx(df, 5)
+    sl = _swing_low_idx(df, 5)
+    pos, stop_p, tgt_p = 0, 0.0, 0.0
+    # State: track last BOS leg for Fib calculation
+    last_bull_leg: tuple | None = None  # (swing_low, swing_high) of the up-leg
+    last_bear_leg: tuple | None = None  # (swing_high, swing_low) of the down-leg
+
+    for i in range(10, n):
+        atr_v = float(atr_s.iloc[i]) if not np.isnan(atr_s.iloc[i]) else 1.0
+        pr    = float(C[i])
+        if pos == 1 and (pr <= stop_p or pr >= tgt_p):
+            signals.append({"bar": i, "action": "CLOSE", "price": pr, "reason": "OTE exit"}); pos = 0
+        elif pos == -1 and (pr >= stop_p or pr <= tgt_p):
+            signals.append({"bar": i, "action": "CLOSE", "price": pr, "reason": "OTE exit"}); pos = 0
+
+        e2 = float(ema200.iloc[i]) if not np.isnan(ema200.iloc[i]) else pr
+        bull_bias = pr > e2
+
+        # Detect fresh BOS — swing high broken (bullish BOS)
+        recent_sh = [k for k in sh if i - 20 < k < i - 2]
+        recent_sl = [k for k in sl if i - 20 < k < i - 2]
+        if recent_sh and C[i] > H[recent_sh[-1]]:
+            lo_idx = max([k for k in sl if k < recent_sh[-1]], default=None)
+            if lo_idx is not None:
+                last_bull_leg = (float(L[lo_idx]), float(H[recent_sh[-1]]))
+        if recent_sl and C[i] < L[recent_sl[-1]]:
+            hi_idx = max([k for k in sh if k < recent_sl[-1]], default=None)
+            if hi_idx is not None:
+                last_bear_leg = (float(H[hi_idx]), float(L[recent_sl[-1]]))
+
+        if pos != 0:
+            continue
+
+        # Check if price is in OTE zone (61.8-79% retracement) of last bull leg
+        if last_bull_leg and bull_bias:
+            lo, hi  = last_bull_leg
+            rng     = hi - lo
+            ote_hi  = hi - 0.618 * rng   # 61.8% retrace
+            ote_lo  = hi - 0.786 * rng   # 78.6% retrace
+            if ote_lo <= pr <= ote_hi:
+                bull_conf = C[i] > O[i] and C[i] > C[i - 1]
+                if bull_conf:
+                    stop_p = ote_lo - 0.3 * atr_v
+                    tgt_p  = hi + rng * 0.5
+                    signals.append({"bar": i, "action": "BUY", "price": pr,
+                                    "reason": f"OTE bull {ote_lo:.2f}-{ote_hi:.2f}"})
+                    pos = 1
+
+        if last_bear_leg and not bull_bias:
+            hi, lo  = last_bear_leg
+            rng     = hi - lo
+            ote_lo  = lo + 0.618 * rng   # 61.8% retrace up
+            ote_hi  = lo + 0.786 * rng   # 78.6% retrace up
+            if ote_lo <= pr <= ote_hi:
+                bear_conf = C[i] < O[i] and C[i] < C[i - 1]
+                if bear_conf:
+                    stop_p = ote_hi + 0.3 * atr_v
+                    tgt_p  = lo - rng * 0.5
+                    signals.append({"bar": i, "action": "SELL", "price": pr,
+                                    "reason": f"OTE bear {ote_lo:.2f}-{ote_hi:.2f}"})
+                    pos = -1
+    _eod(signals, pos, n, float(C[-1]))
+    return signals
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 5e. TWO-LEG PULLBACK — Al Brooks price action
+# ═══════════════════════════════════════════════════════════════════════════════
+@_register("two_leg_pullback", "Two-Leg Pullback (Brooks)",
+           "Trend (EMA9>21>50), two-leg pullback to EMA21, entry on reclaim of EMA9.",
+           ["futures", "stocks", "forex"])
+def two_leg_pullback_strategy(df: pd.DataFrame, **p) -> List[Signal]:
+    signals: List[Signal] = []
+    e9  = _ema(df["close"], 9)
+    e21 = _ema(df["close"], 21)
+    e50 = _ema(df["close"], 50)
+    atr_s = _atr(df, 14)
+    C, H, L = df["close"].values, df["high"].values, df["low"].values
+    n = len(df)
+    pos, stop_p, tgt_p = 0, 0.0, 0.0
+    # Track pullback legs: need 2 consecutive lower-highs (bull) or higher-lows (bear)
+    leg_count_bull = 0
+    leg_count_bear = 0
+
+    for i in range(55, n):
+        atr_v = float(atr_s.iloc[i]) if not np.isnan(atr_s.iloc[i]) else 1.0
+        pr    = float(C[i])
+        if pos == 1 and (pr <= stop_p or pr >= tgt_p):
+            signals.append({"bar": i, "action": "CLOSE", "price": pr, "reason": "2-leg exit"}); pos = 0
+        elif pos == -1 and (pr >= stop_p or pr <= tgt_p):
+            signals.append({"bar": i, "action": "CLOSE", "price": pr, "reason": "2-leg exit"}); pos = 0
+        if pos != 0:
+            continue
+
+        a9, a21, a50 = float(e9.iloc[i]), float(e21.iloc[i]), float(e50.iloc[i])
+        up_stack = a9 > a21 > a50
+        dn_stack = a9 < a21 < a50
+
+        # Bull two-leg pullback: in uptrend, track 2 pushes below EMA9
+        if up_stack:
+            if C[i] < a9 and C[i - 1] >= a9:
+                leg_count_bull += 1
+            elif C[i] > a9 and C[i - 1] < a9 and leg_count_bull >= 2:
+                # Reclaimed EMA9 after 2 legs down
+                if L[i] > a21 - 0.2 * atr_v:  # didn't breach EMA21 significantly
+                    stop_p = a21 - 0.3 * atr_v
+                    tgt_p  = pr + 2.5 * atr_v
+                    signals.append({"bar": i, "action": "BUY", "price": pr,
+                                    "reason": f"2-leg bull pullback, {leg_count_bull} legs"})
+                    pos = 1
+                leg_count_bull = 0
+            elif C[i] >= a9:
+                leg_count_bull = 0
+
+        if dn_stack:
+            if C[i] > a9 and C[i - 1] <= a9:
+                leg_count_bear += 1
+            elif C[i] < a9 and C[i - 1] > a9 and leg_count_bear >= 2:
+                if H[i] < a21 + 0.2 * atr_v:
+                    stop_p = a21 + 0.3 * atr_v
+                    tgt_p  = pr - 2.5 * atr_v
+                    signals.append({"bar": i, "action": "SELL", "price": pr,
+                                    "reason": f"2-leg bear pullback, {leg_count_bear} legs"})
+                    pos = -1
+                leg_count_bear = 0
+            elif C[i] <= a9:
+                leg_count_bear = 0
     _eod(signals, pos, n, float(C[-1]))
     return signals
 
@@ -4236,204 +4615,318 @@ _FIB = {
     "R161": 1.618,
 }
 
+_H_LOOKBACK = 5   # swing pivot lookback
+
 
 def _near(val: float, target: float, tol: float = 0.05) -> bool:
     return abs(val - target) <= tol
 
 
-def _swing_highs_lows_h(df, lookback: int = 5):
-    H = df["high"].values.astype(float)
-    L = df["low"].values.astype(float)
+def _precompute_swings(H, L, lookback: int = _H_LOOKBACK):
+    """Return arrays of (bar_idx, price) for all swing highs and lows."""
     n = len(H)
-    highs, lows = [], []
+    sh, sl = [], []
     for i in range(lookback, n - lookback):
         if all(H[i] >= H[i - k] for k in range(1, lookback + 1)) and \
            all(H[i] >= H[i + k] for k in range(1, lookback + 1)):
-            highs.append(H[i])
+            sh.append((i, H[i]))
         if all(L[i] <= L[i - k] for k in range(1, lookback + 1)) and \
            all(L[i] <= L[i + k] for k in range(1, lookback + 1)):
-            lows.append(L[i])
-    return highs[-4:], lows[-4:]
+            sl.append((i, L[i]))
+    return sh, sl
 
 
-def _build_xabcd_h(df, bullish: bool):
-    highs, lows = _swing_highs_lows_h(df)
-    if len(highs) < 2 or len(lows) < 2:
+def _xabcd_at(sh, sl, i, bullish):
+    """Return (X,A,B,C) using swings confirmed before bar i. D = close[i]."""
+    known_h = [p for b, p in sh if b < i - _H_LOOKBACK]
+    known_l = [p for b, p in sl if b < i - _H_LOOKBACK]
+    if len(known_h) < 2 or len(known_l) < 2:
         return None
-    D = float(df["close"].iloc[-1])
     if bullish:
-        X, A, B, C = lows[-2], highs[-2], lows[-1], highs[-1]
+        X, A, B, C = known_l[-2], known_h[-2], known_l[-1], known_h[-1]
         if not (X < A and B < A and C > B):
             return None
     else:
-        X, A, B, C = highs[-2], lows[-2], highs[-1], lows[-1]
+        X, A, B, C = known_h[-2], known_l[-2], known_h[-1], known_l[-1]
         if not (X > A and B > A and C < B):
             return None
-    return X, A, B, C, D
+    return X, A, B, C
 
 
-def _make_harmonic_signal(name, bullish, bar, price, atr_val, stop_mult):
-    action = "BUY" if bullish else "SELL"
-    direction = "bullish" if bullish else "bearish"
-    stop = price - stop_mult * atr_val if bullish else price + stop_mult * atr_val
-    return {"bar": bar, "action": action, "price": float(price),
-            "reason": f"{name} {direction} at D={price:.4f}"}
+def _harmonic_backtest(df, check_fn, stop_atr_mult: float = 1.0):
+    """
+    Generic sliding-window harmonic backtester.
+    check_fn(X, A, B, C, D, rsi) -> bool
+    Enters at close[i], targets C level, stops at entry ± stop_atr_mult*ATR.
+    """
+    n = len(df)
+    if n < 60:
+        return []
+    H   = df["high"].values.astype(float)
+    L   = df["low"].values.astype(float)
+    C   = df["close"].values.astype(float)
+    atr_s = _atr(df, 14).values.astype(float)
+    rsi_s = _rsi(df["close"], 14).values.astype(float)
+
+    sh, sl = _precompute_swings(H, L)
+
+    signals = []
+    pos = 0          # 1=long, -1=short
+    entry_price = 0.0
+    entry_bar   = 0
+    target      = 0.0
+    stop        = 0.0
+
+    for i in range(60, n):
+        atr_val = atr_s[i]
+        rsi_val = rsi_s[i]
+
+        if pos != 0:
+            if pos == 1:
+                if H[i] >= target:
+                    signals.append({"bar": i, "action": "CLOSE", "price": float(target), "reason": "Harmonic target hit"})
+                    pos = 0
+                elif C[i] <= stop:
+                    signals.append({"bar": i, "action": "CLOSE", "price": float(stop), "reason": "Harmonic stop"})
+                    pos = 0
+                elif i - entry_bar > 30:
+                    signals.append({"bar": i, "action": "CLOSE", "price": float(C[i]), "reason": "Harmonic timeout"})
+                    pos = 0
+            else:
+                if L[i] <= target:
+                    signals.append({"bar": i, "action": "CLOSE", "price": float(target), "reason": "Harmonic target hit"})
+                    pos = 0
+                elif C[i] >= stop:
+                    signals.append({"bar": i, "action": "CLOSE", "price": float(stop), "reason": "Harmonic stop"})
+                    pos = 0
+                elif i - entry_bar > 30:
+                    signals.append({"bar": i, "action": "CLOSE", "price": float(C[i]), "reason": "Harmonic timeout"})
+                    pos = 0
+            continue
+
+        for bullish in (True, False):
+            pts = _xabcd_at(sh, sl, i, bullish)
+            if pts is None:
+                continue
+            X, A, B, C_pt = pts
+            D = C[i]
+            if check_fn(X, A, B, C_pt, D, rsi_val):
+                entry_price = D
+                entry_bar   = i
+                if bullish:
+                    stop   = D - stop_atr_mult * atr_val
+                    target = C_pt        # target = prior C swing
+                    if target <= D:
+                        continue
+                    signals.append({"bar": i, "action": "BUY", "price": float(D),
+                                    "reason": f"Harmonic bullish entry"})
+                    pos = 1
+                else:
+                    stop   = D + stop_atr_mult * atr_val
+                    target = C_pt
+                    if target >= D:
+                        continue
+                    signals.append({"bar": i, "action": "SELL", "price": float(D),
+                                    "reason": f"Harmonic bearish entry"})
+                    pos = -1
+                break  # one entry per bar
+
+    _eod(signals, pos, n, float(C[-1]))
+    return signals
 
 
 @_register("abcd", "ABCD Pattern",
            "Simplest harmonic: AB equal to CD measured-move reversal at D.",
            ["futures", "stocks", "forex"])
 def abcd_strategy(df: pd.DataFrame, **kw) -> List[Signal]:
-    import numpy as np
-    if len(df) < 20:
-        return []
-    atr_val = float(_atr(df, 14).iloc[-1])
-    if atr_val <= 0:
-        return []
-    rsi_now = float(_rsi(df["close"], 14).iloc[-1])
-    bar = len(df) - 1
-    for bullish in (True, False):
-        pts = _build_xabcd_h(df, bullish)
-        if pts is None:
-            continue
-        _, A, B, C, D = pts
+    def check(X, A, B, C, D, rsi):
         AB = abs(A - B)
         CD = abs(C - D)
         if AB == 0:
-            continue
+            return False
         r = CD / AB
-        if _near(r, 1.0, 0.12) and ((bullish and rsi_now < 45) or (not bullish and rsi_now > 55)):
-            return [_make_harmonic_signal("ABCD", bullish, bar, D, atr_val, 1.5)]
-    return []
+        bull = D < C
+        return _near(r, 1.0, 0.12) and ((bull and rsi < 45) or (not bull and rsi > 55))
+    return _harmonic_backtest(df, check, stop_atr_mult=1.5)
 
 
 @_register("gartley", "Gartley Pattern",
            "XABCD: AB=61.8% XA, D=78.6% XA — classic harmonic reversal at PRZ.",
            ["futures", "stocks", "forex"])
 def gartley_strategy(df: pd.DataFrame, **kw) -> List[Signal]:
-    import numpy as np
-    if len(df) < 30:
-        return []
-    atr_val = float(_atr(df, 14).iloc[-1])
-    if atr_val <= 0:
-        return []
-    rsi_now = float(_rsi(df["close"], 14).iloc[-1])
-    bar = len(df) - 1
-    for bullish in (True, False):
-        pts = _build_xabcd_h(df, bullish)
-        if pts is None:
-            continue
-        X, A, B, C, D = pts
+    def check(X, A, B, C, D, rsi):
         XA = abs(A - X)
         AB = abs(B - A)
         BC = abs(C - B)
         if XA == 0 or AB == 0:
-            continue
+            return False
         AB_XA = AB / XA
         BC_AB = BC / AB
         D_XA  = abs(D - X) / XA
-        if (_near(AB_XA, _FIB["R618"], 0.07) and
-                _FIB["R382"] - 0.05 <= BC_AB <= _FIB["R886"] + 0.05 and
-                _near(D_XA, _FIB["R786"], 0.07) and
-                ((bullish and rsi_now < 50) or (not bullish and rsi_now > 50))):
-            return [_make_harmonic_signal("Gartley", bullish, bar, D, atr_val, 1.0)]
-    return []
+        bull  = D < C
+        return (
+            _near(AB_XA, _FIB["R618"], 0.07) and
+            _FIB["R382"] - 0.05 <= BC_AB <= _FIB["R886"] + 0.05 and
+            _near(D_XA, _FIB["R786"], 0.07) and
+            ((bull and rsi < 50) or (not bull and rsi > 50))
+        )
+    return _harmonic_backtest(df, check, stop_atr_mult=1.0)
 
 
 @_register("bat", "Bat Pattern",
            "XABCD: AB=38-50% XA, D=88.6% XA — deep harmonic with tight invalidation.",
            ["futures", "stocks", "forex"])
 def bat_strategy(df: pd.DataFrame, **kw) -> List[Signal]:
-    import numpy as np
-    if len(df) < 30:
-        return []
-    atr_val = float(_atr(df, 14).iloc[-1])
-    if atr_val <= 0:
-        return []
-    rsi_now = float(_rsi(df["close"], 14).iloc[-1])
-    bar = len(df) - 1
-    for bullish in (True, False):
-        pts = _build_xabcd_h(df, bullish)
-        if pts is None:
-            continue
-        X, A, B, C, D = pts
+    def check(X, A, B, C, D, rsi):
         XA = abs(A - X)
         AB = abs(B - A)
         BC = abs(C - B)
         if XA == 0 or AB == 0:
-            continue
+            return False
         AB_XA = AB / XA
         BC_AB = BC / AB
         D_XA  = abs(D - X) / XA
-        if (_FIB["R382"] - 0.04 <= AB_XA <= _FIB["R500"] + 0.04 and
-                _FIB["R382"] - 0.05 <= BC_AB <= _FIB["R886"] + 0.05 and
-                _near(D_XA, _FIB["R886"], 0.06) and
-                ((bullish and rsi_now < 50) or (not bullish and rsi_now > 50))):
-            return [_make_harmonic_signal("Bat", bullish, bar, D, atr_val, 0.8)]
-    return []
+        bull  = D < C
+        return (
+            _FIB["R382"] - 0.04 <= AB_XA <= _FIB["R500"] + 0.04 and
+            _FIB["R382"] - 0.05 <= BC_AB <= _FIB["R886"] + 0.05 and
+            _near(D_XA, _FIB["R886"], 0.06) and
+            ((bull and rsi < 50) or (not bull and rsi > 50))
+        )
+    return _harmonic_backtest(df, check, stop_atr_mult=0.8)
 
 
 @_register("butterfly", "Butterfly Pattern",
            "XABCD: AB=78.6% XA, D=127-161.8% extension — extreme harmonic reversal.",
            ["futures", "stocks", "forex"])
 def butterfly_strategy(df: pd.DataFrame, **kw) -> List[Signal]:
-    import numpy as np
-    if len(df) < 30:
-        return []
-    atr_val = float(_atr(df, 14).iloc[-1])
-    if atr_val <= 0:
-        return []
-    rsi_now = float(_rsi(df["close"], 14).iloc[-1])
-    bar = len(df) - 1
-    for bullish in (True, False):
-        pts = _build_xabcd_h(df, bullish)
-        if pts is None:
-            continue
-        X, A, B, C, D = pts
+    def check(X, A, B, C, D, rsi):
         XA = abs(A - X)
         AB = abs(B - A)
         BC = abs(C - B)
         if XA == 0 or AB == 0:
-            continue
+            return False
         AB_XA = AB / XA
         BC_AB = BC / AB
         D_XA  = abs(D - X) / XA
-        if (_near(AB_XA, _FIB["R786"], 0.07) and
-                _FIB["R382"] - 0.05 <= BC_AB <= _FIB["R886"] + 0.05 and
-                _FIB["R127"] - 0.06 <= D_XA <= _FIB["R161"] + 0.10 and
-                ((bullish and rsi_now < 45) or (not bullish and rsi_now > 55))):
-            return [_make_harmonic_signal("Butterfly", bullish, bar, D, atr_val, 1.2)]
-    return []
+        bull  = D < C
+        return (
+            _near(AB_XA, _FIB["R786"], 0.07) and
+            _FIB["R382"] - 0.05 <= BC_AB <= _FIB["R886"] + 0.05 and
+            _FIB["R127"] - 0.06 <= D_XA <= _FIB["R161"] + 0.10 and
+            ((bull and rsi < 45) or (not bull and rsi > 55))
+        )
+    return _harmonic_backtest(df, check, stop_atr_mult=1.2)
 
 
 @_register("crab", "Crab Pattern",
            "XABCD: D=161.8% XA extension — deepest harmonic, highest precision required.",
            ["futures", "stocks", "forex"])
 def crab_strategy(df: pd.DataFrame, **kw) -> List[Signal]:
-    import numpy as np
-    if len(df) < 30:
-        return []
-    atr_val = float(_atr(df, 14).iloc[-1])
-    if atr_val <= 0:
-        return []
-    rsi_now = float(_rsi(df["close"], 14).iloc[-1])
-    bar = len(df) - 1
-    for bullish in (True, False):
-        pts = _build_xabcd_h(df, bullish)
-        if pts is None:
-            continue
-        X, A, B, C, D = pts
+    def check(X, A, B, C, D, rsi):
         XA = abs(A - X)
         AB = abs(B - A)
         BC = abs(C - B)
         if XA == 0 or AB == 0:
-            continue
+            return False
         AB_XA = AB / XA
         BC_AB = BC / AB
         D_XA  = abs(D - X) / XA
-        if (_FIB["R382"] - 0.05 <= AB_XA <= _FIB["R618"] + 0.05 and
-                _FIB["R382"] - 0.05 <= BC_AB <= _FIB["R886"] + 0.05 and
-                _near(D_XA, _FIB["R161"], 0.08) and
-                ((bullish and rsi_now < 40) or (not bullish and rsi_now > 60))):
-            return [_make_harmonic_signal("Crab", bullish, bar, D, atr_val, 1.0)]
-    return []
+        bull  = D < C
+        return (
+            _FIB["R382"] - 0.05 <= AB_XA <= _FIB["R618"] + 0.05 and
+            _FIB["R382"] - 0.05 <= BC_AB <= _FIB["R886"] + 0.05 and
+            _near(D_XA, _FIB["R161"], 0.08) and
+            ((bull and rsi < 40) or (not bull and rsi > 60))
+        )
+    return _harmonic_backtest(df, check, stop_atr_mult=1.0)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NWOG REACTION — New Week Opening Gap reaction trades (ICT concept)
+# Price reacts AT the weekly open level (acts as S/R), not a gap fill.
+# Different from monday_gap_fill which trades the gap filling itself.
+# ═══════════════════════════════════════════════════════════════════════════════
+@_register("nwog_reaction", "NWOG Reaction",
+           "Price reaction trade at the New Week Opening Gap level (weekly open as S/R).",
+           ["futures", "stocks", "forex"])
+def nwog_reaction_strategy(df: pd.DataFrame, **p) -> List[Signal]:
+    """Trade bounces/rejections at the weekly opening price acting as S/R."""
+    signals: List[Signal] = []
+    if len(df) < 20:
+        return signals
+
+    atr_s  = _atr(df, 14)
+    ema50  = _ema(df["close"], 50)
+    H, L, C, O = df["high"].values, df["low"].values, df["close"].values, df["open"].values
+    n = len(df)
+    intra = _has_intraday(df)
+    sh = _swing_high_idx(df, 3)
+    sl = _swing_low_idx(df, 3)
+    pos, stop_p, tgt_p = 0, 0.0, 0.0
+
+    # Track the weekly open price — updated each Monday (or first bar of the week)
+    weekly_open: float | None = None
+    last_weekday: int = -1
+
+    for i in range(1, n):
+        ts    = df.index[i]
+        atr_v = float(atr_s.iloc[i]) if not np.isnan(atr_s.iloc[i]) else 1.0
+        pr    = float(C[i])
+
+        # Update weekly open on Monday (weekday 0) or first bar after weekend
+        wd = ts.weekday()
+        prev_wd = df.index[i - 1].weekday()
+        if wd == 0 or (wd < prev_wd and prev_wd >= 4):
+            # New week — record this bar's open as the weekly open
+            weekly_open = float(O[i])
+            last_weekday = wd
+
+        if weekly_open is None:
+            continue
+
+        # Exit logic
+        if pos == 1 and (pr <= stop_p or pr >= tgt_p):
+            signals.append({"bar": i, "action": "CLOSE", "price": pr, "reason": "NWOG exit"}); pos = 0
+        elif pos == -1 and (pr >= stop_p or pr <= tgt_p):
+            signals.append({"bar": i, "action": "CLOSE", "price": pr, "reason": "NWOG exit"}); pos = 0
+
+        if pos != 0:
+            continue
+
+        # Only trade in kill zones for intraday
+        if intra and not _is_kill_zone(ts):
+            continue
+
+        # EMA50 trend bias
+        e50 = float(ema50.iloc[i]) if not np.isnan(ema50.iloc[i]) else pr
+        bull_bias = pr > e50
+        bear_bias = pr < e50
+
+        wopen = weekly_open
+        tolerance = 0.3 * atr_v  # how close price must be to NWOG level
+
+        # Bullish reaction: price dips INTO weekly open from above, closes back up
+        if bull_bias and abs(L[i] - wopen) <= tolerance and C[i] > wopen:
+            bull_conf = C[i] > O[i] and (C[i] - O[i]) > 0.4 * (H[i] - L[i] + 1e-9)
+            if bull_conf:
+                stop_p = wopen - 0.8 * atr_v
+                above  = [H[k] for k in sh if k < i]
+                tgt_p  = max(above[-3:]) if above else pr + 2.0 * atr_v
+                signals.append({"bar": i, "action": "BUY", "price": pr,
+                                "reason": f"NWOG bounce {wopen:.2f}"})
+                pos = 1
+
+        # Bearish reaction: price spikes INTO weekly open from below, closes back down
+        elif bear_bias and abs(H[i] - wopen) <= tolerance and C[i] < wopen:
+            bear_conf = C[i] < O[i] and (O[i] - C[i]) > 0.4 * (H[i] - L[i] + 1e-9)
+            if bear_conf:
+                stop_p = wopen + 0.8 * atr_v
+                below  = [L[k] for k in sl if k < i]
+                tgt_p  = min(below[-3:]) if below else pr - 2.0 * atr_v
+                signals.append({"bar": i, "action": "SELL", "price": pr,
+                                "reason": f"NWOG rejection {wopen:.2f}"})
+                pos = -1
+
+    _eod(signals, pos, n, float(C[-1]))
+    return signals
