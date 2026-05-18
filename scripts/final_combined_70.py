@@ -1,8 +1,8 @@
 """
-Final optimized 23-entry roster — 20 unique strategies, 70%+ combined WR.
+Final optimized 24-entry roster — 20 unique strategies, target 70%+ combined WR.
 
 Unique strategy list (20):
-  S: TGF (1 strategy, 4 TFs), OGF-5m, ICT Silver Bullet
+  S: TGF (1 strategy, 5 TFs: 5m/15m/30m/1h/4h), OGF-5m, ICT Silver Bullet
   A: ICT Order Block, BB Squeeze
   B: OGF-1h, OGF-15m, Monday GF-1h, Monday GF-15m, Smart Money,
      SuperTrend, Dual EMA Cross, ORB, Trend Following,
@@ -20,10 +20,11 @@ def start(d): return (TODAY - timedelta(days=d)).strftime("%Y-%m-%d")
 
 ROSTER = [
     # ── S class ──────────────────────────────────────────────────────────────
+    ("Trend Gap Fill (5m)",         "trend_gap_fill",       "5m",   58),   # NEW — S class
+    ("Trend Gap Fill (15m)",        "trend_gap_fill",       "15m",  58),
+    ("Trend Gap Fill (30m)",        "trend_gap_fill",       "30m",  59),
     ("Trend Gap Fill (1h)",         "trend_gap_fill",       "1h",  700),
     ("Trend Gap Fill (4h)",         "trend_gap_fill",       "4h",  700),
-    ("Trend Gap Fill (30m)",        "trend_gap_fill",       "30m",  59),
-    ("Trend Gap Fill (15m)",        "trend_gap_fill",       "15m",  58),
     ("Opening Gap Fill (5m)",       "gap_fill",             "5m",   58),
     ("ICT Silver Bullet (30m)",     "silver_bullet_strict", "30m",  59),
     # ── A class ──────────────────────────────────────────────────────────────
@@ -98,7 +99,7 @@ if total_trades_all > 0:
     avg_pf      = round(sum(all_pfs) / len(all_pfs), 2)
     g           = grade(combined_wr, avg_pf)
     print()
-    print("  COMBINED RESULTS ({} entries, {:,} trades)".format(len(all_wrs), total_trades_all))
+    print("  COMBINED RESULTS ({} entries / 20 unique strategies, {:,} trades)".format(len(all_wrs), total_trades_all))
     print()
     print("  Weighted Win Rate :  {:.1f}%".format(combined_wr))
     print("  Simple Avg WR     :  {:.1f}%".format(simple_avg))
