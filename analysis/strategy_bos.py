@@ -113,7 +113,7 @@ class BOSEntryStrategy:
             pd_zone = context.get("premium_discount", {}).get("zone", "EQUILIBRIUM")
             vwap_bias = context.get("vwap_position", {}).get("bias", "NEUTRAL")
 
-            for tf in ("15m", "5m"):
+            for tf in ("15m", "5m", "1H"):
                 if tf not in df_dict or tf not in context.get("market_structure", {}):
                     continue
                 entry_df = df_dict[tf].copy()

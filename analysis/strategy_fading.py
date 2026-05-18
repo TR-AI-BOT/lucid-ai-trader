@@ -49,7 +49,7 @@ class FadingStrategy:
 
     def _has_poi(self, price: float, context: dict) -> bool:
         """Require POI overlap (OB/FVG/key level) to allow fading."""
-        for tf in ("5m", "15m"):
+        for tf in ("1d", "1h", "4h", "5m", "15m"):
             for ob in context.get("order_blocks", {}).get(tf, {}).get("standard", []):
                 if float(ob.get("low", price - 1)) <= price <= float(ob.get("high", price + 1)):
                     return True

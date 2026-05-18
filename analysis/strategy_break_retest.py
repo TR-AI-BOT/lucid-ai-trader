@@ -83,7 +83,7 @@ class BreakRetestStrategy:
                         {"price": float(anchor + k * step), "type": "Round Number", "strength": "MINOR"}
                     )
 
-            for tf in ("15m", "5m", "1H"):
+            for tf in ("5m", "15m", "1H"):
                 for ev in context.get("market_structure", {}).get(tf, {}).get("bos_choch", []):
                     if "BOS" in str(ev.get("type", "")):
                         levels.append(

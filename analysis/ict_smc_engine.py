@@ -41,7 +41,7 @@ class ICTSMCEngine:
             if now_dt.tzinfo is None:
                 now_dt = pytz.utc.localize(now_dt)
 
-            for tf in ("15m", "5m"):
+            for tf in ("1h", "15m", "5m"):
                 fvg_data = context.get("fvgs", {}).get(tf, {})
                 candidates = []
                 for f in fvg_data.get("standard", []):

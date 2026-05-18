@@ -28,6 +28,7 @@ _FUTURES_MAP: dict[str, str] = {
     "NQ":  "NQ=F",
     "RTY": "RTY=F",
     "YM":  "YM=F",
+    "MYM": "MYM=F",
     "GC":  "GC=F",
     "MGC": "MGC=F",
     "CL":  "CL=F",
@@ -61,6 +62,7 @@ _INTERVAL_MAX_DAYS: dict[str, int] = {
     "30m": 60,
     "60m": 730,
     "1h":  730,
+    "4h":  730,   # resampled from 1H
     "1d":  99999,
     "1wk": 99999,
 }
@@ -121,13 +123,17 @@ def fetch_ohlcv(
     ticker = tv_to_yf(symbol)
     logger.info("Fetching %s (%s) %s → %s @ %s", symbol, ticker, start, end, interval)
 
+    # 4H is not a native yfinance interval — fetch 1H and resample
+    resample_4h = (interval == "4h")
+    fetch_interval = "1h" if resample_4h else interval
+
     max_days = _INTERVAL_MAX_DAYS.get(interval, 60)
     try:
         df = yf.download(
             ticker,
             start=start,
             end=end,
-            interval=interval,
+            interval=fetch_interval,
             auto_adjust=True,
             progress=False,
         )
@@ -162,5 +168,16 @@ def fetch_ohlcv(
     df.index = df.index.tz_convert(pytz.timezone("US/Eastern"))
 
     df = df[["open", "high", "low", "close", "volume"]].dropna()
+
+    # Resample 1H → 4H
+    if resample_4h and not df.empty:
+        df = df.resample("4h", closed="left", label="left").agg({
+            "open":  "first",
+            "high":  "max",
+            "low":   "min",
+            "close": "last",
+            "volume": "sum",
+        }).dropna()
+
     logger.info("Fetched %d bars for %s", len(df), ticker)
     return df
