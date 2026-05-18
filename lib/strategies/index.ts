@@ -23,6 +23,7 @@ export { analyzeHighConviction } from "./high-conviction";
 export { analyzeProbability } from "./probability";
 export { analyzeNewsSentiment } from "./news-sentiment";
 export { analyzeTrendGapFill } from "./trend-gap-fill";
+export { analyzeHarmonic, analyzeGartley, analyzeBat, analyzeButterfly, analyzeCrab, analyzeAbcd } from "./harmonic";
 
 import type { Candle, SignalResult } from "../types";
 import { analyzeOrb } from "./orb";
@@ -50,6 +51,7 @@ import { analyzeHighConviction } from "./high-conviction";
 import { analyzeProbability } from "./probability";
 import { analyzeNewsSentiment } from "./news-sentiment";
 import { analyzeTrendGapFill } from "./trend-gap-fill";
+import { analyzeHarmonic, analyzeGartley, analyzeBat, analyzeButterfly, analyzeCrab, analyzeAbcd } from "./harmonic";
 
 const STRATEGY_MAP: Record<string, (candles: Candle[]) => SignalResult | null> = {
   ORB: analyzeOrb,
@@ -76,7 +78,13 @@ const STRATEGY_MAP: Record<string, (candles: Candle[]) => SignalResult | null> =
   HIGH_CONVICTION: analyzeHighConviction,
   PROBABILITY: analyzeProbability,
   NEWS_SENTIMENT: analyzeNewsSentiment,
-  TREND_GAP_FILL: analyzeTrendGapFill,
+  TREND_GAP_FILL:   analyzeTrendGapFill,
+  HARMONIC:         analyzeHarmonic,
+  GARTLEY:          analyzeGartley,
+  BAT:              analyzeBat,
+  BUTTERFLY:        analyzeButterfly,
+  CRAB:             analyzeCrab,
+  ABCD:             analyzeAbcd,
 };
 
 export function runStrategy(strategyId: string, candles: Candle[]): SignalResult | null {

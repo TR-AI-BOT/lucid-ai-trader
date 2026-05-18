@@ -4224,3 +4224,216 @@ def kijun_bounce_strategy(df, **kw):
 
     _eod(signals, pos, n, float(C[-1]))
     return signals
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# HARMONIC PATTERNS  (Gartley · Bat · Butterfly · Crab · ABCD)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_FIB = {
+    "R382": 0.382, "R500": 0.500, "R618": 0.618, "R705": 0.705,
+    "R786": 0.786, "R886": 0.886, "R100": 1.000, "R127": 1.272,
+    "R161": 1.618,
+}
+
+
+def _near(val: float, target: float, tol: float = 0.05) -> bool:
+    return abs(val - target) <= tol
+
+
+def _swing_highs_lows_h(df, lookback: int = 5):
+    H = df["high"].values.astype(float)
+    L = df["low"].values.astype(float)
+    n = len(H)
+    highs, lows = [], []
+    for i in range(lookback, n - lookback):
+        if all(H[i] >= H[i - k] for k in range(1, lookback + 1)) and \
+           all(H[i] >= H[i + k] for k in range(1, lookback + 1)):
+            highs.append(H[i])
+        if all(L[i] <= L[i - k] for k in range(1, lookback + 1)) and \
+           all(L[i] <= L[i + k] for k in range(1, lookback + 1)):
+            lows.append(L[i])
+    return highs[-4:], lows[-4:]
+
+
+def _build_xabcd_h(df, bullish: bool):
+    highs, lows = _swing_highs_lows_h(df)
+    if len(highs) < 2 or len(lows) < 2:
+        return None
+    D = float(df["close"].iloc[-1])
+    if bullish:
+        X, A, B, C = lows[-2], highs[-2], lows[-1], highs[-1]
+        if not (X < A and B < A and C > B):
+            return None
+    else:
+        X, A, B, C = highs[-2], lows[-2], highs[-1], lows[-1]
+        if not (X > A and B > A and C < B):
+            return None
+    return X, A, B, C, D
+
+
+def _make_harmonic_signal(name, bullish, bar, price, atr_val, stop_mult):
+    action = "BUY" if bullish else "SELL"
+    direction = "bullish" if bullish else "bearish"
+    stop = price - stop_mult * atr_val if bullish else price + stop_mult * atr_val
+    return {"bar": bar, "action": action, "price": float(price),
+            "reason": f"{name} {direction} at D={price:.4f}"}
+
+
+@_register("abcd", "ABCD Pattern",
+           "Simplest harmonic: AB equal to CD measured-move reversal at D.",
+           ["futures", "stocks", "forex"])
+def abcd_strategy(df: pd.DataFrame, **kw) -> List[Signal]:
+    import numpy as np
+    if len(df) < 20:
+        return []
+    atr_val = float(_atr(df, 14).iloc[-1])
+    if atr_val <= 0:
+        return []
+    rsi_now = float(_rsi(df["close"], 14).iloc[-1])
+    bar = len(df) - 1
+    for bullish in (True, False):
+        pts = _build_xabcd_h(df, bullish)
+        if pts is None:
+            continue
+        _, A, B, C, D = pts
+        AB = abs(A - B)
+        CD = abs(C - D)
+        if AB == 0:
+            continue
+        r = CD / AB
+        if _near(r, 1.0, 0.12) and ((bullish and rsi_now < 45) or (not bullish and rsi_now > 55)):
+            return [_make_harmonic_signal("ABCD", bullish, bar, D, atr_val, 1.5)]
+    return []
+
+
+@_register("gartley", "Gartley Pattern",
+           "XABCD: AB=61.8% XA, D=78.6% XA — classic harmonic reversal at PRZ.",
+           ["futures", "stocks", "forex"])
+def gartley_strategy(df: pd.DataFrame, **kw) -> List[Signal]:
+    import numpy as np
+    if len(df) < 30:
+        return []
+    atr_val = float(_atr(df, 14).iloc[-1])
+    if atr_val <= 0:
+        return []
+    rsi_now = float(_rsi(df["close"], 14).iloc[-1])
+    bar = len(df) - 1
+    for bullish in (True, False):
+        pts = _build_xabcd_h(df, bullish)
+        if pts is None:
+            continue
+        X, A, B, C, D = pts
+        XA = abs(A - X)
+        AB = abs(B - A)
+        BC = abs(C - B)
+        if XA == 0 or AB == 0:
+            continue
+        AB_XA = AB / XA
+        BC_AB = BC / AB
+        D_XA  = abs(D - X) / XA
+        if (_near(AB_XA, _FIB["R618"], 0.07) and
+                _FIB["R382"] - 0.05 <= BC_AB <= _FIB["R886"] + 0.05 and
+                _near(D_XA, _FIB["R786"], 0.07) and
+                ((bullish and rsi_now < 50) or (not bullish and rsi_now > 50))):
+            return [_make_harmonic_signal("Gartley", bullish, bar, D, atr_val, 1.0)]
+    return []
+
+
+@_register("bat", "Bat Pattern",
+           "XABCD: AB=38-50% XA, D=88.6% XA — deep harmonic with tight invalidation.",
+           ["futures", "stocks", "forex"])
+def bat_strategy(df: pd.DataFrame, **kw) -> List[Signal]:
+    import numpy as np
+    if len(df) < 30:
+        return []
+    atr_val = float(_atr(df, 14).iloc[-1])
+    if atr_val <= 0:
+        return []
+    rsi_now = float(_rsi(df["close"], 14).iloc[-1])
+    bar = len(df) - 1
+    for bullish in (True, False):
+        pts = _build_xabcd_h(df, bullish)
+        if pts is None:
+            continue
+        X, A, B, C, D = pts
+        XA = abs(A - X)
+        AB = abs(B - A)
+        BC = abs(C - B)
+        if XA == 0 or AB == 0:
+            continue
+        AB_XA = AB / XA
+        BC_AB = BC / AB
+        D_XA  = abs(D - X) / XA
+        if (_FIB["R382"] - 0.04 <= AB_XA <= _FIB["R500"] + 0.04 and
+                _FIB["R382"] - 0.05 <= BC_AB <= _FIB["R886"] + 0.05 and
+                _near(D_XA, _FIB["R886"], 0.06) and
+                ((bullish and rsi_now < 50) or (not bullish and rsi_now > 50))):
+            return [_make_harmonic_signal("Bat", bullish, bar, D, atr_val, 0.8)]
+    return []
+
+
+@_register("butterfly", "Butterfly Pattern",
+           "XABCD: AB=78.6% XA, D=127-161.8% extension — extreme harmonic reversal.",
+           ["futures", "stocks", "forex"])
+def butterfly_strategy(df: pd.DataFrame, **kw) -> List[Signal]:
+    import numpy as np
+    if len(df) < 30:
+        return []
+    atr_val = float(_atr(df, 14).iloc[-1])
+    if atr_val <= 0:
+        return []
+    rsi_now = float(_rsi(df["close"], 14).iloc[-1])
+    bar = len(df) - 1
+    for bullish in (True, False):
+        pts = _build_xabcd_h(df, bullish)
+        if pts is None:
+            continue
+        X, A, B, C, D = pts
+        XA = abs(A - X)
+        AB = abs(B - A)
+        BC = abs(C - B)
+        if XA == 0 or AB == 0:
+            continue
+        AB_XA = AB / XA
+        BC_AB = BC / AB
+        D_XA  = abs(D - X) / XA
+        if (_near(AB_XA, _FIB["R786"], 0.07) and
+                _FIB["R382"] - 0.05 <= BC_AB <= _FIB["R886"] + 0.05 and
+                _FIB["R127"] - 0.06 <= D_XA <= _FIB["R161"] + 0.10 and
+                ((bullish and rsi_now < 45) or (not bullish and rsi_now > 55))):
+            return [_make_harmonic_signal("Butterfly", bullish, bar, D, atr_val, 1.2)]
+    return []
+
+
+@_register("crab", "Crab Pattern",
+           "XABCD: D=161.8% XA extension — deepest harmonic, highest precision required.",
+           ["futures", "stocks", "forex"])
+def crab_strategy(df: pd.DataFrame, **kw) -> List[Signal]:
+    import numpy as np
+    if len(df) < 30:
+        return []
+    atr_val = float(_atr(df, 14).iloc[-1])
+    if atr_val <= 0:
+        return []
+    rsi_now = float(_rsi(df["close"], 14).iloc[-1])
+    bar = len(df) - 1
+    for bullish in (True, False):
+        pts = _build_xabcd_h(df, bullish)
+        if pts is None:
+            continue
+        X, A, B, C, D = pts
+        XA = abs(A - X)
+        AB = abs(B - A)
+        BC = abs(C - B)
+        if XA == 0 or AB == 0:
+            continue
+        AB_XA = AB / XA
+        BC_AB = BC / AB
+        D_XA  = abs(D - X) / XA
+        if (_FIB["R382"] - 0.05 <= AB_XA <= _FIB["R618"] + 0.05 and
+                _FIB["R382"] - 0.05 <= BC_AB <= _FIB["R886"] + 0.05 and
+                _near(D_XA, _FIB["R161"], 0.08) and
+                ((bullish and rsi_now < 40) or (not bullish and rsi_now > 60))):
+            return [_make_harmonic_signal("Crab", bullish, bar, D, atr_val, 1.0)]
+    return []

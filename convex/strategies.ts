@@ -27,6 +27,13 @@ export const STRATEGY_REGISTRY = [
   { id: "HIGH_CONVICTION",name: "High Conviction",         description: "High confidence setups — 4+ conditions aligned",    timeframe: "1h"  },
   { id: "PROBABILITY",    name: "Probability Engine",      description: "Win probability weighted entries",                   timeframe: "1h"  },
   { id: "NEWS_SENTIMENT", name: "News Sentiment",          description: "Volume-spike event detection and directional setups", timeframe: "1d"  },
+  { id: "TREND_GAP_FILL",name: "Trend Gap Fill",           description: "Gap against trend direction targets prior close fill — 77.7% WR backtested", timeframe: "1d"  },
+  { id: "HARMONIC",      name: "Harmonic Patterns",        description: "Auto-detect Gartley, Bat, Butterfly, Crab, ABCD Fibonacci patterns",           timeframe: "1h"  },
+  { id: "GARTLEY",       name: "Gartley",                  description: "XABCD: AB=61.8% XA, D=78.6% XA — classic harmonic reversal",                  timeframe: "1h"  },
+  { id: "BAT",           name: "Bat Pattern",              description: "XABCD: AB=38-50% XA, D=88.6% XA — precise deep reversal zone",                timeframe: "1h"  },
+  { id: "BUTTERFLY",     name: "Butterfly Pattern",        description: "XABCD: AB=78.6% XA, D=127-161.8% extension — extreme reversal",               timeframe: "1h"  },
+  { id: "CRAB",          name: "Crab Pattern",             description: "XABCD: D=161.8% XA extension — deepest harmonic reversal",                    timeframe: "1h"  },
+  { id: "ABCD",          name: "ABCD Pattern",             description: "Simplest harmonic: AB≈CD legs, equal measured move reversal",                  timeframe: "1h"  },
 ] as const;
 
 export const listConfigs = query({
