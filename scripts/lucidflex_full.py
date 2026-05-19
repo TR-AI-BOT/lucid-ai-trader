@@ -33,6 +33,13 @@ from collections import defaultdict, deque
 TODAY = datetime.today()
 END   = TODAY.strftime("%Y-%m-%d")
 
+# ── SAFE MODE ─────────────────────────────────────────────────────────────────
+# True  = adaptive logic ON  (rolling WR, strategy cooldowns, profit lock)
+#         → live market protection, conservative earnings
+# False = adaptive logic OFF (fixed risk, no cooldowns, no lock)
+#         → maximum earnings, lowest drawdown — use for baseline/backtest
+SAFE_MODE = True
+
 def start_date(days):
     return (TODAY - timedelta(days=days)).strftime("%Y-%m-%d")
 
@@ -135,9 +142,8 @@ def _apply_risk(t, risk, mll, account):
 
 # ─── Display helpers ─────────────────────────────────────────────────────────
 
-def _box(label, lines, width=108):
+def _box(label, lines, width=118):
     W = "=" * width
-    S = "-" * width
     print(f"\n{W}")
     print(f"  {label}")
     for ln in lines:
@@ -145,14 +151,14 @@ def _box(label, lines, width=108):
     print(W)
 
 def _chal_header():
-    print(f"  {'Day':<5} | {'Result':<12} | {'Trd':>4} | {'W':>4} | {'L':>4} | {'WR%':>5} | {'Risk':>6} "
+    print(f"  {'Day':<8} | {'Result':<12} | {'Trades':>6} | {'W / L':<12} | {'WR%':>5} | {'Risk':>6} "
           f"| {'Day P&L':>10} | {'Total P&L':>10} | {'Account':>11} | {'MLL':>9} | {'Room':>8}")
-    print("-" * 108)
+    print("-" * 118)
 
 def _fund_header():
-    print(f"  {'Day':<5} | {'Phase':<9} | {'Result':<12} | {'Trd':>4} | {'W':>4} | {'L':>4} | {'WR%':>5} | {'Risk':>6} "
+    print(f"  {'Day':<8} | {'Phase':<9} | {'Result':<12} | {'Trades':>6} | {'W / L':<12} | {'WR%':>5} | {'Risk':>6} "
           f"| {'Day P&L':>10} | {'Account':>11} | {'MLL':>9} | {'Room':>8}")
-    print("-" * 108)
+    print("-" * 118)
 
 def _adapt_mult(outcomes):
     """Rolling 10-trade WR → risk multiplier + display label."""
@@ -243,7 +249,8 @@ def run_challenge(trades_by_day, cfg):
         ps, cs   = ("+" if day_pnl >= 0 else ""), ("+" if cum_pnl >= 0 else "")
         room     = account - mll
 
-        print(f"  D{day_num:02d}   | {result:<12} | {w+l:>4} | {w:>4} | {l:>4} | {day_wr:>5} | ${risk:>5.0f} "
+        wl_str = f"{w}W / {l}L"
+        print(f"  Day {day_num:02d}  | {result:<12} | {w+l:>6} | {wl_str:<12} | {day_wr:>5} | ${risk:>5.0f} "
               f"| {ps}{day_pnl:>9,.2f} | {cs}{cum_pnl:>9,.2f} | ${account:>10,.2f} | ${mll:>8,.0f} | ${room:>7,.0f}"
               f"{mll_note}")
 
@@ -255,7 +262,7 @@ def run_challenge(trades_by_day, cfg):
                 pass_date = day
                 tdays     = len(days_traded)
                 overall_wr = f"{cum_w/(cum_w+cum_l)*100:.1f}%" if (cum_w+cum_l) > 0 else "--"
-                print("-" * 108)
+                print("-" * 118)
                 print(f"  *** CHALLENGE PASSED — Day {tdays}  |  Profit: +${cum_pnl:,.2f}  "
                       f"|  Overall WR: {overall_wr} ({cum_w}W / {cum_l}L) ***")
             else:
@@ -264,10 +271,10 @@ def run_challenge(trades_by_day, cfg):
 
     status = "PASSED" if passed else ("BREACHED" if breached else "IN PROGRESS")
     overall_wr = f"{cum_w/(cum_w+cum_l)*100:.1f}%" if (cum_w+cum_l) > 0 else "--"
-    print("-" * 108)
+    print("-" * 118)
     print(f"  STATUS: {status}  |  Final: ${account:,.2f}  |  MLL: ${mll:,.0f}  "
           f"|  Overall WR: {overall_wr} ({cum_w}W / {cum_l}L  |  {cum_w+cum_l} trades)")
-    print("=" * 108)
+    print("=" * 118)
     print()
     return passed, pass_date, account, mll
 
@@ -315,8 +322,9 @@ def run_funded(trades_by_day, cfg, start_from, challenge_passed):
     active_days = [d for d in sorted(trades_by_day.keys()) if d >= start_from]
 
     tag = "POST-CHALLENGE" if challenge_passed else "SIM ONLY"
+    mode_tag = "SAFE MODE ON  — rolling WR + cooldowns + profit lock" if SAFE_MODE else "SAFE MODE OFF — fixed risk, no cooldowns, no lock"
     _box(
-        f"FUNDED ACCOUNT  |  {name}  [{tag}]",
+        f"FUNDED ACCOUNT  |  {name}  [{tag}]  |  {mode_tag}",
         [f"Start: ${start_bal:,.0f}  |  MLL: ${mll:,.0f}  |  ITB: ${itb:,.0f}",
          f"BUFFER  Base ${buf_risk_base:.0f}/trade (scales down on losses)  |  Stop -${buf_stop:.0f}  "
          f"|  Goal: ${buf_threshold:,.0f} headroom + MLL locked",
@@ -334,10 +342,15 @@ def run_funded(trades_by_day, cfg, start_from, challenge_passed):
         risk = current_risk
         stop = buf_stop if not buf_done else pay_stop
 
-        # ── Adaptive market logic ─────────────────────────────────────────────
-        adapt_mult, adapt_label = _adapt_mult(recent_outcomes)
-        day_risk      = max(30.0, round(risk * adapt_mult / 5) * 5)
-        strat_streaks = defaultdict(int)   # per-strategy loss streak, resets daily
+        # ── Adaptive market logic (SAFE MODE only) ────────────────────────────
+        if SAFE_MODE:
+            adapt_mult, adapt_label = _adapt_mult(recent_outcomes)
+            day_risk = max(30.0, round(risk * adapt_mult / 5) * 5)
+        else:
+            adapt_mult, adapt_label = 1.0, ""
+            day_risk = risk
+
+        strat_streaks = defaultdict(int)
         profit_locked = False
 
         day_pnl = 0.0
@@ -353,14 +366,13 @@ def run_funded(trades_by_day, cfg, start_from, challenge_passed):
             if day_pnl <= -effective_stop:
                 break
 
-            # Per-strategy cooldown: skip if this strategy lost 3 in a row today
-            if strat_streaks[t["sid"]] >= 3:
+            # Per-strategy cooldown (SAFE MODE only)
+            if SAFE_MODE and strat_streaks[t["sid"]] >= 3:
                 continue
 
-            # Intraday profit lock: once up 5× BASE risk, trade at 60% risk
-            # Uses base risk (not adaptive day_risk) so threshold doesn't shrink in cautious mode
+            # Intraday profit lock (SAFE MODE only)
             trade_risk = day_risk
-            if day_pnl >= risk * 5:
+            if SAFE_MODE and day_pnl >= risk * 5:
                 profit_locked = True
                 trade_risk = max(30.0, round(day_risk * 0.60 / 5) * 5)
 
@@ -371,11 +383,11 @@ def run_funded(trades_by_day, cfg, start_from, challenge_passed):
             log.append({**t, "pnl": pnl, "account": account, "mll": mll})
             if pnl > 0:
                 w += 1; cum_w += 1
-                recent_outcomes.append(True)
+                if SAFE_MODE: recent_outcomes.append(True)
                 strat_streaks[t["sid"]] = 0
             else:
                 l += 1; cum_l += 1
-                recent_outcomes.append(False)
+                if SAFE_MODE: recent_outcomes.append(False)
                 strat_streaks[t["sid"]] += 1
             if account <= mll:
                 breached = True; breach_date = day
@@ -409,7 +421,8 @@ def run_funded(trades_by_day, cfg, start_from, challenge_passed):
         lock_tag = " [LOCK]" if profit_locked else ""
         note     = mll_note + adapt_label + lock_tag
 
-        print(f"  D{fund_day_num:02d}   | {phase:<9} | {result:<12} | {w+l:>4} | {w:>4} | {l:>4} | {day_wr:>5} | ${day_risk:>5.0f} "
+        wl_str = f"{w}W / {l}L"
+        print(f"  Day {fund_day_num:02d}  | {phase:<9} | {result:<12} | {w+l:>6} | {wl_str:<12} | {day_wr:>5} | ${day_risk:>5.0f} "
               f"| {ps}{day_total:>9,.2f} | ${account:>10,.2f} | ${mll:>8,.0f} | ${headroom_now:>7,.0f}"
               f"{note}")
 
@@ -433,12 +446,12 @@ def run_funded(trades_by_day, cfg, start_from, challenge_passed):
                 buf_done     = True
                 cycle_profit = cycle_days = 0
                 current_risk = pay_risk_base  # reset to payout base risk
-                print("-" * 108)
+                print("-" * 118)
                 print(f"  BUFFER COMPLETE  |  Day {fund_day_num}  ({buf_trading_days} trading days)"
                       f"  |  MLL LOCKED  |  Headroom: ${headroom_now:,.0f}")
                 print(f"  >>> PAYOUT PHASE STARTS  |  Base: ${pay_risk_base:.0f}/trade  "
                       f"|  Dynamic scaling ON  |  Stop -${pay_stop:.0f}")
-                print("-" * 108)
+                print("-" * 118)
         else:
             cycle_profit += day_total
             cycle_days   += 1   # all trading days count, not just profitable ones
@@ -458,7 +471,7 @@ def run_funded(trades_by_day, cfg, start_from, challenge_passed):
                 })
 
                 capped = f"  (cap — actual cycle ${cycle_profit:,.2f})" if gross < cycle_profit else ""
-                print("=" * 108)
+                print("=" * 118)
                 print(f"  PAYOUT #{cycle_num}  |  Funded Day {fund_day_num}  |  {cycle_days} trading days in cycle")
                 print(f"  Cycle Profit:   ${cycle_profit:,.2f}{capped}")
                 print(f"  YOUR 90%:       ${payout:,.2f}   <<< PAID OUT TO YOU")
@@ -469,7 +482,7 @@ def run_funded(trades_by_day, cfg, start_from, challenge_passed):
                 print(f"  Total earned:   ${total_earned:,.2f}")
                 if carry > 0:
                     print(f"  Carry forward:  ${carry:,.2f}  (rolls into next cycle)")
-                print("=" * 108)
+                print("=" * 118)
                 _fund_header()
 
                 cycle_profit = carry
@@ -483,8 +496,8 @@ def run_funded(trades_by_day, cfg, start_from, challenge_passed):
 
 def print_summary(cfg, log, daily_pnl, payouts, breached, breach_date,
                   account, mll, total_earned, cum_w, cum_l):
-    W = "=" * 108
-    S = "-" * 108
+    W = "=" * 118
+    S = "-" * 118
     print(f"\n{W}")
     print(f"  FUNDED SUMMARY  |  {cfg['name']}")
     print(W)
