@@ -136,6 +136,26 @@ STRATEGY_REGISTRY = {
     # v19: 51.8% WR (5m) | 1,163 trades | +$4,478 P&L | CONS
     "ASIA_RET_LONG":    {"active": True, "min_confidence": 0.72, "approved_tfs": ["5m", "15m"],        "wr": 51.8, "total_pnl": 4478},
     "ASIA_RET_SHORT":   {"active": True, "min_confidence": 0.72, "approved_tfs": ["5m", "15m"],        "wr": 51.8, "total_pnl": 4478},
+
+    # ── v20 NEW STRATEGIES — Walk-Forward Validated (5yr, 3 symbols) ─────────
+
+    # ── 32 · N27_LON_DCONF · London Double Confirm ───────────────────────────
+    # London: Asia break + EMA8/21 cross in same direction within 4-bar window
+    # v20: 51.4% WR (5m) | 691 trades | +$9,995 P&L | CONS
+    "LON_DCONF_LONG":   {"active": True, "min_confidence": 0.74, "approved_tfs": ["5m", "15m"],        "wr": 51.4, "total_pnl": 9995},
+    "LON_DCONF_SHORT":  {"active": True, "min_confidence": 0.74, "approved_tfs": ["5m", "15m"],        "wr": 51.4, "total_pnl": 9995},
+
+    # ── 33 · N24_IB_RETEST · Initial Balance Retest ──────────────────────────
+    # 10:30 AM–Noon ET: price retests IB hi/lo with EMA200 regime alignment
+    # v20: 59.8% WR (5m) | 107 trades | +$5,140 P&L | VARI — highest WR in roster
+    "IB_RETEST_LONG":   {"active": True, "min_confidence": 0.73, "approved_tfs": ["5m", "15m", "30m"], "wr": 59.8, "total_pnl": 5140},
+    "IB_RETEST_SHORT":  {"active": True, "min_confidence": 0.73, "approved_tfs": ["5m", "15m", "30m"], "wr": 59.8, "total_pnl": 5140},
+
+    # ── 34 · N26_VWAP_TAP · VWAP Double Tap ─────────────────────────────────
+    # RTH: two consecutive VWAP tags then bounce; EMA8/21 + RSI filter
+    # v20: 46.4% WR (5m) | 5,427 trades | +$56,690 P&L — highest P&L contributor
+    "VWAP_TAP_LONG":    {"active": True, "min_confidence": 0.73, "approved_tfs": ["5m", "15m", "30m"], "wr": 46.4, "total_pnl": 56690},
+    "VWAP_TAP_SHORT":   {"active": True, "min_confidence": 0.73, "approved_tfs": ["5m", "15m", "30m"], "wr": 46.4, "total_pnl": 56690},
 }
 
 
