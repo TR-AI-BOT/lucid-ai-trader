@@ -156,6 +156,32 @@ STRATEGY_REGISTRY = {
     # v20: 46.4% WR (5m) | 5,427 trades | +$56,690 P&L — highest P&L contributor
     "VWAP_TAP_LONG":    {"active": True, "min_confidence": 0.73, "approved_tfs": ["5m", "15m", "30m"], "wr": 46.4, "total_pnl": 56690},
     "VWAP_TAP_SHORT":   {"active": True, "min_confidence": 0.73, "approved_tfs": ["5m", "15m", "30m"], "wr": 46.4, "total_pnl": 56690},
+
+    # ── v21 NEW STRATEGIES — Walk-Forward Validated (5yr, 3 symbols) ─────────
+
+    # ── 35 · N29_ORB_PULLBACK · Opening Range Pullback ───────────────────────
+    # 9:45-10:30 AM ET: first pullback to ORB hi/lo after the opening range forms
+    # v21: 50.4% WR (5m) | 504 trades | +$5,334 P&L | CONS ✅ PASS
+    "ORB_PULLBACK_LONG":  {"active": True, "min_confidence": 0.73, "approved_tfs": ["5m", "15m"],        "wr": 50.4, "total_pnl": 5334},
+    "ORB_PULLBACK_SHORT": {"active": True, "min_confidence": 0.73, "approved_tfs": ["5m", "15m"],        "wr": 50.4, "total_pnl": 5334},
+
+    # ── 36 · N30_PDM_BOUNCE · Prior Day Midpoint Bounce ──────────────────────
+    # RTH: pin bar rejection at prior day's (H+L)/2 midpoint with EMA alignment
+    # v21: 49.1% WR (5m) | 491 trades | +$18,062 P&L | CONS
+    "PDM_BOUNCE_LONG":    {"active": True, "min_confidence": 0.74, "approved_tfs": ["5m", "15m", "1H"], "wr": 49.1, "total_pnl": 18062},
+    "PDM_BOUNCE_SHORT":   {"active": True, "min_confidence": 0.74, "approved_tfs": ["5m", "15m", "1H"], "wr": 49.1, "total_pnl": 18062},
+
+    # ── 37 · N34_ORB_BREAK · Classic ORB Breakout ────────────────────────────
+    # 9:45 AM-Noon ET: close outside 9:30-9:44 opening range with EMA200 regime
+    # v21: 48.9% WR (5m) | 1,805 trades | +$19,936 P&L | CONS — highest P&L of v21
+    "ORB_BREAK_LONG":     {"active": True, "min_confidence": 0.74, "approved_tfs": ["5m", "15m", "30m"], "wr": 48.9, "total_pnl": 19936},
+    "ORB_BREAK_SHORT":    {"active": True, "min_confidence": 0.74, "approved_tfs": ["5m", "15m", "30m"], "wr": 48.9, "total_pnl": 19936},
+
+    # ── 38 · N32_WED_PWR · Wednesday Power Hour ──────────────────────────────
+    # Wednesday 2-4 PM ET: fresh EMA8/21 cross + VWAP alignment + RSI momentum
+    # v21: 49.6% WR (15m) | 117 trades | +$3,693 P&L | VARI
+    "WED_PWR_LONG":       {"active": True, "min_confidence": 0.74, "approved_tfs": ["15m", "30m"],        "wr": 49.6, "total_pnl": 3693},
+    "WED_PWR_SHORT":      {"active": True, "min_confidence": 0.74, "approved_tfs": ["15m", "30m"],        "wr": 49.6, "total_pnl": 3693},
 }
 
 
