@@ -66,39 +66,33 @@ async function switchToSymbol(symbol: string): Promise<boolean> {
   };
   const searchTerm = TV_SYMBOL_MAP[symbol] ?? symbol;
 
-  // Click the symbol button in the header to open search
+  // Click the symbol button in the top toolbar (it has the symbol text like "MNQ1!" and sits at y<20)
   const clickResult = await evaluate(`
     (function() {
-      // Find the symbol label button in the top bar (leftmost button, small y)
-      const btns = Array.from(document.querySelectorAll('button')).filter(b => {
+      const btn = Array.from(document.querySelectorAll('button')).find(b => {
         const r = b.getBoundingClientRect();
-        return r.x < 250 && r.y < 60 && r.width > 30;
+        const text = b.textContent?.trim() ?? '';
+        return r.y > 0 && r.y < 20 && r.x > 0 && r.x < 200 && text.length > 1 && /[A-Z!]/.test(text);
       });
-      if (!btns.length) return 'no-btn';
-      btns[0].click();
+      if (!btn) return 'no-btn';
+      btn.click();
       return 'clicked';
     })()
   `);
 
   if (clickResult !== "clicked") return false;
-  await sleep(600);
+  await sleep(800);
 
-  // Find the search input and set the symbol
+  // Find the symbol search input (placeholder: "Symbol, ISIN, or CUSIP")
   const typeResult = await evaluate(`
     (function(sym) {
-      const input = document.querySelector('input[data-role="search"]')
-        || document.querySelector('[class*="SearchInput"] input')
-        || document.querySelector('[class*="search-input"] input')
-        || Array.from(document.querySelectorAll('input')).find(i => {
-          const r = i.getBoundingClientRect();
-          return r.y < 200 && r.width > 100 && document.activeElement === i;
-        })
-        || Array.from(document.querySelectorAll('input')).find(i => {
-          const r = i.getBoundingClientRect();
-          return r.y < 200 && r.width > 100;
-        });
+      const input = Array.from(document.querySelectorAll('input')).find(i =>
+        (i.placeholder || '').includes('Symbol') || document.activeElement === i
+      ) || Array.from(document.querySelectorAll('input')).find(i => {
+        const r = i.getBoundingClientRect();
+        return r.y > 50 && r.y < 300 && r.width > 100;
+      });
       if (!input) return 'no-input';
-      // Use React's native setter to trigger change events
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
       if (setter) setter.call(input, sym);
       input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -113,16 +107,13 @@ async function switchToSymbol(symbol: string): Promise<boolean> {
   // Press Enter to select the first result
   await evaluate(`
     (function() {
-      const input = document.querySelector('input[data-role="search"]')
-        || Array.from(document.querySelectorAll('input')).find(i => {
-          const r = i.getBoundingClientRect();
-          return r.y < 200 && r.width > 100;
-        });
+      const input = Array.from(document.querySelectorAll('input')).find(i =>
+        (i.placeholder || '').includes('Symbol') || document.activeElement === i
+      );
       if (input) {
         input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
         return 'enter';
       }
-      // Click first search result
       const row = document.querySelector('[class*="listItem"], [class*="result-row"], [class*="search-result"]');
       if (row) { row.click(); return 'clicked-result'; }
       return 'no-target';
@@ -133,37 +124,72 @@ async function switchToSymbol(symbol: string): Promise<boolean> {
   return true;
 }
 
-// Enable a TP or SL checkbox if not already checked
-async function enableCheckbox(index: number): Promise<void> {
+function getOrderPanel(): string {
+  return `(document.querySelector('[data-name="order-panel"]') || document.querySelector('[class*="order-panel"]') || document.querySelector('[class*="orderPanel"]'))`;
+}
+
+// Enable the TP or SL toggle in the order panel (tries label-based lookup then falls back to index)
+async function enableTpSlToggle(type: "tp" | "sl"): Promise<void> {
+  const labelText = type === "tp" ? "take profit" : "stop loss";
+  const fallbackIdx = type === "tp" ? 0 : 1;
   await evaluate(`
-    (function(idx) {
-      const panel = document.querySelector('[data-name="order-panel"]');
+    (function(labelText, fallbackIdx) {
+      const panel = ${getOrderPanel()};
       if (!panel) return;
-      const checkboxes = Array.from(panel.querySelectorAll('input[type="checkbox"]'));
-      const cb = checkboxes[idx];
-      if (cb && !cb.checked) {
-        cb.click();
+      // Label-based: find the toggle that's near the TP/SL label
+      const allEls = Array.from(panel.querySelectorAll('*'));
+      const labelEl = allEls.find(el =>
+        el.childElementCount <= 2 &&
+        (el.textContent || '').toLowerCase().includes(labelText)
+      );
+      const container = labelEl
+        ? (labelEl.closest('[class*="exit"]') || labelEl.closest('[class*="tp"]') || labelEl.closest('[class*="sl"]') || labelEl.parentElement?.parentElement || labelEl.parentElement)
+        : null;
+      const toggle = container
+        ? (container.querySelector('input[type="checkbox"]') || container.querySelector('[role="switch"]') || container.querySelector('[role="checkbox"]'))
+        : null;
+      if (toggle) {
+        const on = toggle instanceof HTMLInputElement ? toggle.checked : toggle.getAttribute('aria-checked') === 'true';
+        if (!on) toggle.click();
+        return;
       }
-    })(${index})
+      // Fallback: by index
+      const cbs = Array.from(panel.querySelectorAll('input[type="checkbox"]'));
+      const cb = cbs[fallbackIdx];
+      if (cb && !cb.checked) cb.click();
+    })('${labelText}', ${fallbackIdx})
   `);
   await sleep(200);
 }
 
-// Set a numeric input in the order panel by index (0=qty, 1=TP price, 2=SL price)
-async function setOrderPanelValue(inputIndex: number, value: number): Promise<void> {
+// Set TP or SL price value in the order panel (tries label-based lookup then falls back to index)
+async function setTpSlValue(type: "tp" | "sl", value: number): Promise<void> {
+  const labelText = type === "tp" ? "take profit" : "stop loss";
+  const fallbackIdx = type === "tp" ? 2 : 3;
   await evaluate(`
-    (function(idx, val) {
-      const panel = document.querySelector('[data-name="order-panel"]');
+    (function(labelText, fallbackIdx, val) {
+      const panel = ${getOrderPanel()};
       if (!panel) return;
-      const inputs = Array.from(panel.querySelectorAll('input:not([type="checkbox"])'));
-      const input = inputs[idx];
+      const allEls = Array.from(panel.querySelectorAll('*'));
+      const labelEl = allEls.find(el =>
+        el.childElementCount <= 2 &&
+        (el.textContent || '').toLowerCase().includes(labelText)
+      );
+      const container = labelEl
+        ? (labelEl.closest('[class*="exit"]') || labelEl.closest('[class*="tp"]') || labelEl.closest('[class*="sl"]') || labelEl.parentElement?.parentElement || labelEl.parentElement)
+        : null;
+      const inputs = container
+        ? Array.from(container.querySelectorAll('input[type="number"], input:not([type="checkbox"]):not([type="button"])'))
+        : [];
+      const input = inputs.length > 0 ? inputs[inputs.length - 1] as HTMLInputElement
+        : (Array.from(panel.querySelectorAll('input:not([type="checkbox"])')) as HTMLInputElement[])[fallbackIdx];
       if (!input) return;
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
       if (setter) setter.call(input, String(val));
       input.dispatchEvent(new Event('input', { bubbles: true }));
       input.dispatchEvent(new Event('change', { bubbles: true }));
       input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
-    })(${inputIndex}, ${value})
+    })('${labelText}', ${fallbackIdx}, ${value})
   `);
   await sleep(150);
 }
@@ -202,25 +228,36 @@ export async function placeTVPaperOrder(
 
     // Step 3: Set Take Profit if provided
     if (options.takeProfit && options.takeProfit > 0) {
-      await enableCheckbox(0); // TP checkbox is index 0
+      await enableTpSlToggle("tp");
       await sleep(300);
-      await setOrderPanelValue(1, Math.round(options.takeProfit * 100) / 100); // TP price is input index 1
+      await setTpSlValue("tp", Math.round(options.takeProfit * 100) / 100);
     }
 
     // Step 4: Set Stop Loss if provided
     if (options.stopLoss && options.stopLoss > 0) {
-      await enableCheckbox(1); // SL checkbox is index 1
+      await enableTpSlToggle("sl");
       await sleep(300);
-      await setOrderPanelValue(2, Math.round(options.stopLoss * 100) / 100); // SL price is input index 2
+      await setTpSlValue("sl", Math.round(options.stopLoss * 100) / 100);
     }
 
     await sleep(200);
 
-    // Step 5: Click place order
+    // Step 5: Click place order — try multiple known button selectors/text patterns
     const orderResult = await evaluate(`
       (function() {
-        const btn = document.querySelector('[data-name="place-and-modify-button"]');
-        if (!btn) return 'not-found';
+        // TradingView has used different data-name/text for this button over time
+        const candidates = [
+          document.querySelector('[data-name="place-and-modify-button"]'),
+          document.querySelector('[data-name="order-submit-button"]'),
+          document.querySelector('[data-name="place-order-button"]'),
+          // Fallback: find any visible button in the order panel whose text mentions Buy/Sell/Place/Confirm
+          ...Array.from(document.querySelectorAll('[data-name="order-panel"] button, [class*="order-panel"] button, [class*="orderPanel"] button')).filter(b => {
+            const t = (b.textContent || '').toLowerCase();
+            return t.includes('buy') || t.includes('sell') || t.includes('place') || t.includes('confirm') || t.includes('order');
+          }),
+        ].filter(Boolean);
+        if (!candidates.length) return 'not-found';
+        const btn = candidates[0];
         const label = btn.textContent?.trim().slice(0, 60) ?? '';
         btn.click();
         return label || 'placed';
@@ -228,7 +265,7 @@ export async function placeTVPaperOrder(
     `);
 
     if (orderResult === "not-found") {
-      return { ok: false, message: "Place order button not found" };
+      return { ok: false, message: "Place order button not found — open Trade → Paper Trading in TradingView and ensure the order panel is visible" };
     }
 
     const tpStr = options.takeProfit ? ` | TP: ${options.takeProfit.toFixed(2)}` : "";
@@ -237,6 +274,48 @@ export async function placeTVPaperOrder(
 
   } catch (err) {
     return { ok: false, message: `TV Paper Trading error: ${String(err)}` };
+  }
+}
+
+// Returns text content of TradingView's paper trading positions panel.
+// Returns null if CDP is unavailable (caller should skip sync).
+// Returns empty string if panel found but no positions visible.
+export async function getPositionsPanelText(): Promise<string | null> {
+  try {
+    const result = await evaluate(`
+      (function() {
+        // Try to activate the Positions tab in the bottom panel
+        const tabs = Array.from(document.querySelectorAll('[role="tab"], [class*="tab-"]'));
+        const posTab = tabs.find(t => /position/i.test(t.textContent || ''));
+        if (posTab) { posTab.click(); }
+
+        // Collect text from the bottom panel (paper trading area)
+        const selectors = [
+          '[class*="bottom-widgetbar"]',
+          '[class*="bottomWidgetbar"]',
+          '[id="bottom-area"]',
+          '[class*="layout__area--bottom"]',
+          '[data-name="trading-panel"]',
+          '[class*="trading-panel"]',
+          '[class*="tradingPanel"]',
+        ];
+        for (const sel of selectors) {
+          const el = document.querySelector(sel);
+          if (el) return el.textContent?.trim() || '';
+        }
+        // Fallback: look for any visible panel that mentions "Position"
+        const allDivs = Array.from(document.querySelectorAll('div'));
+        const posDiv = allDivs.find(d =>
+          d.children.length > 2 &&
+          /position/i.test(d.textContent || '') &&
+          d.getBoundingClientRect().height > 50
+        );
+        return posDiv?.textContent?.trim() || '';
+      })()
+    `);
+    return typeof result === "string" ? result : null;
+  } catch {
+    return null;
   }
 }
 

@@ -13,6 +13,8 @@ export default defineSchema({
     reason: v.string(),
     strategy: v.optional(v.string()),
     confidence: v.optional(v.number()),
+    stopLoss: v.optional(v.number()),
+    takeProfit: v.optional(v.number()),
     status: v.union(
       v.literal("pending"),
       v.literal("approved"),
@@ -36,6 +38,8 @@ export default defineSchema({
     pnl: v.optional(v.number()),
     status: v.union(v.literal("open"), v.literal("closed")),
     strategy: v.optional(v.string()),
+    stopLoss: v.optional(v.number()),
+    takeProfit: v.optional(v.number()),
     executedAt: v.number(),
     closedAt: v.optional(v.number()),
   })

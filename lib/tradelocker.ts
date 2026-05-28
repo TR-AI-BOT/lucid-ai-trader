@@ -192,6 +192,23 @@ export async function getPositions(): Promise<Position[]> {
   }
 }
 
+export async function closePositionBySymbol(symbol: string): Promise<OrderResult> {
+  try {
+    const account = await getAccount();
+    const tlSymbol = SYMBOL_MAP[symbol] ?? symbol;
+    const data = await request<{ positions: Array<{ id: number; name?: string; tradableInstrumentId: number }> }>(
+      `/trade/accounts/${account.id}/positions`
+    );
+    const pos = (data.positions ?? []).find(
+      (p) => (p.name ?? "").toUpperCase() === tlSymbol.toUpperCase()
+    );
+    if (!pos) return { ok: false, message: `No open position for ${symbol}` };
+    return closePosition(pos.id);
+  } catch (err) {
+    return { ok: false, message: String(err) };
+  }
+}
+
 export async function getAccountBalance(): Promise<number> {
   try {
     const account = await getAccount();

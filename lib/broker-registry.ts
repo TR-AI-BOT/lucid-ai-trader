@@ -70,15 +70,12 @@ class TradovateBroker {
 
   isConnected(): boolean { return this.connected; }
 
-  async placeOrder(symbol: string, qty: number, action: "Buy" | "Sell"): Promise<OrderResult> {
-    return tradovate.placeOrder(symbol, qty, action);
+  async placeOrder(symbol: string, qty: number, action: "Buy" | "Sell", options: TVOrderOptions = {}): Promise<OrderResult> {
+    return tradovate.placeOrder(symbol, qty, action, options);
   }
 
   async closePosition(symbol: string): Promise<OrderResult> {
-    const positions = await tradovate.getPositions();
-    const pos = positions.find((p) => p.symbol === symbol);
-    if (!pos) return { ok: false, message: `No open position for ${symbol}` };
-    return tradovate.liquidatePosition(0);
+    return tradovate.closePositionBySymbol(symbol);
   }
 
   async getBalance(): Promise<number> { return tradovate.getAccountBalance(); }
@@ -109,7 +106,8 @@ class TradeLockerBroker {
   }
 
   isConnected(): boolean { return this.connected; }
-  async placeOrder(symbol: string, qty: number, action: "Buy" | "Sell"): Promise<OrderResult> { return tradelocker.placeOrder(symbol, qty, action); }
+  async placeOrder(symbol: string, qty: number, action: "Buy" | "Sell", options: TVOrderOptions = {}): Promise<OrderResult> { return tradelocker.placeOrder(symbol, qty, action); }
+  async closePosition(symbol: string): Promise<OrderResult> { return tradelocker.closePositionBySymbol(symbol); }
   async getBalance(): Promise<number> { return tradelocker.getAccountBalance(); }
   async getPositions(): Promise<Position[]> { return tradelocker.getPositions(); }
   disconnect(): void { this.connected = false; tradelocker.clearToken(); }
@@ -212,16 +210,20 @@ export async function placeOrder(
 ): Promise<OrderResult> {
   if (activeBroker === "tv-paper") return tvPaper.placeTVPaperOrder(symbol, action, options);
   if (process.env.PAPER_MODE === "true") return paper.placeOrder(symbol, qty, action);
-  if (activeBroker === "tradovate") return tradovateBroker.placeOrder(symbol, qty, action);
-  if (activeBroker === "tradelocker") return tradelockerBroker.placeOrder(symbol, qty, action);
+  if (activeBroker === "tradovate") return tradovateBroker.placeOrder(symbol, qty, action, options);
+  if (activeBroker === "tradelocker") return tradelockerBroker.placeOrder(symbol, qty, action, options);
   return paper.placeOrder(symbol, qty, action);
 }
 
-export async function closePosition(symbol: string): Promise<OrderResult> {
-  if (activeBroker === "tv-paper") return tvPaper.placeTVPaperOrder(symbol, "Sell");
+export async function closePosition(symbol: string, positionSide?: "Long" | "Short"): Promise<OrderResult> {
+  if (activeBroker === "tv-paper") {
+    // Place opposite-side market order to close the position
+    const closeSide: "Buy" | "Sell" = positionSide === "Short" ? "Buy" : "Sell";
+    return tvPaper.placeTVPaperOrder(symbol, closeSide);
+  }
   if (process.env.PAPER_MODE === "true") return paper.closePosition(symbol);
   if (activeBroker === "tradovate") return tradovateBroker.closePosition(symbol);
-  if (activeBroker === "tradelocker") return tradelockerBroker.placeOrder(symbol, 0, "Sell");
+  if (activeBroker === "tradelocker") return tradelockerBroker.closePosition(symbol);
   return paper.closePosition(symbol);
 }
 

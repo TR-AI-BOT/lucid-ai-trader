@@ -11,8 +11,9 @@ import { PerformanceView } from "@/components/views/PerformanceView";
 import { BacktestView } from "@/components/views/BacktestView";
 import { AiChatView } from "@/components/views/AiChatView";
 import { MarketsView } from "@/components/views/MarketsView";
+import { SystemView } from "@/components/views/SystemView";
 
-type View = "dashboard" | "strategies" | "brokers" | "tradingview" | "performance" | "backtest" | "chat" | "markets";
+type View = "dashboard" | "strategies" | "brokers" | "tradingview" | "performance" | "backtest" | "chat" | "markets" | "system";
 
 export default function DashboardLayout({ children: _ }: { children: React.ReactNode }) {
   const [activeView, setActiveView] = useState<View>("dashboard");
@@ -31,6 +32,7 @@ export default function DashboardLayout({ children: _ }: { children: React.React
           {activeView === "backtest" && <BacktestView />}
           {activeView === "chat" && <AiChatView />}
           {activeView === "markets" && <MarketsView />}
+          {activeView === "system" && <SystemView />}
         </main>
       </div>
     </div>

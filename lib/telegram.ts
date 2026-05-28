@@ -90,10 +90,43 @@ export async function sendTradeAlert(
   action: string,
   symbol: string,
   qty: number,
-  price: number
+  price: number,
+  stopLoss?: number,
+  takeProfit?: number
 ): Promise<void> {
   const emoji = action === "BUY" ? "🟢" : action === "SELL" ? "🔴" : "🟠";
+  const tp = takeProfit ? `\nTP: ${takeProfit.toFixed(2)}` : "";
+  const sl = stopLoss ? `\nSL: ${stopLoss.toFixed(2)}` : "";
   await sendMessage(
-    `${emoji} <b>Trade Executed</b>\n${action} ${qty}x ${symbol} @ ${price}`
+    `${emoji} <b>Trade Executed</b>\n${action} ${qty}x ${symbol} @ ${price}${tp}${sl}`
+  );
+}
+
+export async function sendManualExitAlert(opts: {
+  side: "Long" | "Short";
+  symbol: string;
+  strategy?: string;
+  entryPrice: number;
+  exitPrice: number;
+  pnl: number;
+  dayPnl: number;
+  balance: number;
+}): Promise<void> {
+  const { side, symbol, strategy, entryPrice, exitPrice, pnl, dayPnl, balance } = opts;
+  const isLoss = pnl < 0;
+  const headerEmoji = isLoss ? "🔴" : "🟢";
+  const sideEmoji = side === "Long" ? "🟢" : "🔴";
+  const strategyStr = strategy ? ` · ${strategy}` : "";
+  const pnlSign = pnl >= 0 ? "+" : "−";
+  const daySign = dayPnl >= 0 ? "+" : "−";
+  const fmt = (n: number) => Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  await sendMessage(
+    `${headerEmoji} <b>MANUAL EXIT – ${isLoss ? "LOSS" : "PROFIT"}</b>\n` +
+    `${sideEmoji} ${side.toUpperCase()} · ${symbol}${strategyStr}\n` +
+    `📍 Entry ${entryPrice.toFixed(2)}\n` +
+    `🚪 Exit ${exitPrice.toFixed(2)} (manual)\n` +
+    `💰 P&L ${pnlSign}$${fmt(pnl)}\n` +
+    `📊 Day: ${daySign}$${fmt(dayPnl)} · Bal: $${fmt(balance)}`
   );
 }

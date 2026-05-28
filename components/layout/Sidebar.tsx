@@ -7,10 +7,10 @@ import { usePortfolioPnl } from "@/hooks/usePortfolioPnl";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
-  LayoutDashboard, Zap, ArrowLeftRight, LineChart, BarChart3, FlaskConical, MessageSquare, Pause, Play, Globe,
+  LayoutDashboard, Zap, ArrowLeftRight, LineChart, BarChart3, FlaskConical, MessageSquare, Pause, Play, Globe, Server,
 } from "lucide-react";
 
-type View = "dashboard" | "strategies" | "brokers" | "tradingview" | "performance" | "backtest" | "chat" | "markets";
+type View = "dashboard" | "strategies" | "brokers" | "tradingview" | "performance" | "backtest" | "chat" | "markets" | "system";
 
 const NAV_ITEMS: { view: View; label: string; icon: React.ElementType }[] = [
   { view: "dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -21,6 +21,7 @@ const NAV_ITEMS: { view: View; label: string; icon: React.ElementType }[] = [
   { view: "performance", label: "Performance", icon: BarChart3 },
   { view: "backtest", label: "Backtest", icon: FlaskConical },
   { view: "chat", label: "AI Chat", icon: MessageSquare },
+  { view: "system", label: "System", icon: Server },
 ];
 
 interface Props {

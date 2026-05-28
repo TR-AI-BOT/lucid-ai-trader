@@ -22,6 +22,8 @@ export const add = mutation({
     reason: v.string(),
     strategy: v.optional(v.string()),
     confidence: v.optional(v.number()),
+    stopLoss: v.optional(v.number()),
+    takeProfit: v.optional(v.number()),
     status: v.union(
       v.literal("pending"),
       v.literal("approved"),
@@ -78,12 +80,15 @@ export const deleteAll = mutation({
 export const getPerformance = query({
   args: { userId: v.string() },
   handler: async (ctx, { userId }) => {
-    // NY midnight: UTC offset is -5 (EST) or -4 (EDT); use -5 as conservative floor
+    // Today's midnight in New York time — handles EST (-5) and EDT (-4) automatically
     const nowUtc = Date.now();
-    const nyMidnightUtc = new Date(
-      new Date(nowUtc).toLocaleDateString("en-US", { timeZone: "America/New_York" }) +
-        "T00:00:00-05:00"
-    ).getTime();
+    const nyDateStr = new Date(nowUtc).toLocaleDateString("en-US", {
+      timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
+    }); // "MM/DD/YYYY"
+    const [m, d, y] = nyDateStr.split("/");
+    const localMidnight = new Date(`${y}-${m}-${d}T00:00:00`);
+    const nyOffset = new Date(localMidnight.toLocaleString("en-US", { timeZone: "America/New_York" })).getTime() - localMidnight.getTime();
+    const nyMidnightUtc = localMidnight.getTime() - nyOffset;
     const signals = await ctx.db
       .query("signals")
       .withIndex("by_user", (q) => q.eq("userId", userId))

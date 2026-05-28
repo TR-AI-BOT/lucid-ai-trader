@@ -104,11 +104,6 @@ export async function runAutonomousEngine(userId: string, force = false): Promis
     return { skipped: null, timeframesRan: [], signalsFound: 0, signalsRouted: 0 };
   }
 
-  // Sort by confidence, cap at 3 signals per run to prevent overtrading
-  const toProcess = Array.from(best.values())
-    .sort((a, b) => b.confidence - a.confidence)
-    .slice(0, 3);
-
   const symbolsByEntry = Array.from(best.entries())
     .sort((a, b) => b[1].confidence - a[1].confidence)
     .slice(0, 3);
@@ -199,7 +194,7 @@ export async function runAutonomousEngine(userId: string, force = false): Promis
       }
     }
 
-    dailyCount++;
+    if (result.action === "executed") dailyCount++;
     signalsRouted++;
   }
 

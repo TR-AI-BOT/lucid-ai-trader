@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { internalMutation, mutation, query } from "./_generated/server";
 
 export const getActive = query({
   args: { userId: v.string() },
@@ -122,5 +122,16 @@ export const toggleAutonomous = mutation({
   args: { accountId: v.id("accounts"), enabled: v.boolean() },
   handler: async (ctx, { accountId, enabled }) => {
     await ctx.db.patch(accountId, { autonomousMode: enabled });
+  },
+});
+
+export const resetAllDailyPnl = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const accounts = await ctx.db.query("accounts").collect();
+    for (const acc of accounts) {
+      await ctx.db.patch(acc._id, { dailyPnl: 0 });
+    }
+    console.log(`[cron] Reset dailyPnl for ${accounts.length} accounts`);
   },
 });

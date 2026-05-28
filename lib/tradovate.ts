@@ -57,20 +57,39 @@ export async function getAccessToken(): Promise<string> {
   return _token.accessToken;
 }
 
+export interface TradovateOrderOptions {
+  stopLoss?: number;
+  takeProfit?: number;
+}
+
 export async function placeOrder(
   symbol: string,
   qty: number,
-  action: "Buy" | "Sell"
+  action: "Buy" | "Sell",
+  options: TradovateOrderOptions = {}
 ): Promise<OrderResult> {
   try {
-    const data = await request<{ orderId: number }>("/order/placeorder", "POST", {
+    const closeAction = action === "Buy" ? "Sell" : "Buy";
+    const body: Record<string, unknown> = {
       accountSpec: process.env.TRADOVATE_USERNAME,
       symbol,
       orderQty: qty,
       orderType: "Market",
       action,
-    });
-    return { ok: true, orderId: String(data.orderId), message: `Order placed: ${action} ${qty} ${symbol}` };
+      isAutomated: true,
+    };
+
+    if (options.takeProfit && options.takeProfit > 0) {
+      body.bracket1 = { action: closeAction, orderType: "Limit", price: options.takeProfit };
+    }
+    if (options.stopLoss && options.stopLoss > 0) {
+      body.bracket2 = { action: closeAction, orderType: "Stop", stopPrice: options.stopLoss };
+    }
+
+    const data = await request<{ orderId: number }>("/order/placeorder", "POST", body);
+    const tpStr = options.takeProfit ? ` TP:${options.takeProfit}` : "";
+    const slStr = options.stopLoss ? ` SL:${options.stopLoss}` : "";
+    return { ok: true, orderId: String(data.orderId), message: `Order placed: ${action} ${qty} ${symbol}${tpStr}${slStr}` };
   } catch (err) {
     return { ok: false, message: String(err) };
   }
@@ -80,6 +99,17 @@ export async function liquidatePosition(positionId: number): Promise<OrderResult
   try {
     await request("/order/liquidateposition", "POST", { positionId, adminAction: false });
     return { ok: true, message: "Position liquidated" };
+  } catch (err) {
+    return { ok: false, message: String(err) };
+  }
+}
+
+export async function closePositionBySymbol(symbol: string): Promise<OrderResult> {
+  try {
+    const data = await request<Array<{ id: number; symbol: string; netPos: number; avgPrice: number }>>("/position/list");
+    const pos = data.find((p) => p.netPos !== 0 && p.symbol === symbol);
+    if (!pos) return { ok: false, message: `No open position for ${symbol}` };
+    return liquidatePosition(pos.id);
   } catch (err) {
     return { ok: false, message: String(err) };
   }

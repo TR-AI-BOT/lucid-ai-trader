@@ -110,6 +110,14 @@ export function DashboardView() {
     return () => { clearTimeout(initial); clearInterval(interval); };
   }, [userId]);
 
+  // Poll for manual closes in TradingView paper trading every 30 seconds
+  useEffect(() => {
+    if (!userId) return;
+    const sync = () => fetch(`/api/system/sync-positions?userId=${userId}`, { method: "POST" }).catch(() => {});
+    const interval = window.setInterval(() => { void sync(); }, 30_000);
+    return () => clearInterval(interval);
+  }, [userId]);
+
   async function forceScan() {
     setScanning(true);
     setScanMsg("");

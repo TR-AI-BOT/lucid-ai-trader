@@ -27,6 +27,8 @@ export const add = mutation({
     qty: v.number(),
     entryPrice: v.number(),
     strategy: v.optional(v.string()),
+    stopLoss: v.optional(v.number()),
+    takeProfit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     return await ctx.db.insert("trades", {
@@ -34,6 +36,16 @@ export const add = mutation({
       status: "open",
       executedAt: Date.now(),
     });
+  },
+});
+
+export const getOpen = query({
+  args: { userId: v.string() },
+  handler: async (ctx, { userId }) => {
+    return await ctx.db
+      .query("trades")
+      .withIndex("by_user_status", (q) => q.eq("userId", userId).eq("status", "open"))
+      .collect();
   },
 });
 

@@ -11,6 +11,7 @@
 import type * as accounts from "../accounts.js";
 import type * as auth from "../auth.js";
 import type * as chat from "../chat.js";
+import type * as crons from "../crons.js";
 import type * as http from "../http.js";
 import type * as pairs from "../pairs.js";
 import type * as signals from "../signals.js";
@@ -31,6 +32,7 @@ declare const fullApi: ApiFromModules<{
   accounts: typeof accounts;
   auth: typeof auth;
   chat: typeof chat;
+  crons: typeof crons;
   http: typeof http;
   pairs: typeof pairs;
   signals: typeof signals;

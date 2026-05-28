@@ -14,22 +14,23 @@ export async function routeSignal(
   account: Account,
   mode: TradingMode,
   dailyTradeCount: number,
-  signalId: string
+  signalId: string,
+  positionSide?: "Long" | "Short"
 ): Promise<SignalRouteResult> {
-  // Risk gate
-  const risk = checkTradeAllowed(account, signal, dailyTradeCount, account.peakBalance ?? account.startingBalance);
+  // CLOSE always bypasses risk/mode gates — never block a position close
+  let qty = parseInt(process.env.ORDER_QTY ?? "1", 10);
 
-  if (!risk.allowed) {
-    if (risk.haltLevel >= 2) {
-      await telegram.sendRiskAlert(risk.haltLevel, risk.reason);
+  if (signal.action !== "CLOSE") {
+    // Risk gate (only for entry signals)
+    const risk = checkTradeAllowed(account, signal, dailyTradeCount, account.peakBalance ?? account.startingBalance);
+    if (!risk.allowed) {
+      if (risk.haltLevel >= 2) {
+        await telegram.sendRiskAlert(risk.haltLevel, risk.reason);
+      }
+      return { action: "filtered", reason: risk.reason };
     }
-    return { action: "filtered", reason: risk.reason };
+    qty = Math.min(qty, risk.maxContracts);
   }
-
-  const qty = Math.min(
-    risk.maxContracts,
-    parseInt(process.env.ORDER_QTY ?? "1", 10)
-  );
 
   if (mode === "SIGNALS_ONLY") {
     await telegram.sendMessage(
@@ -50,10 +51,9 @@ export async function routeSignal(
   const brokerAction: "Buy" | "Sell" = signal.action === "BUY" ? "Buy" : "Sell";
 
   if (signal.action === "CLOSE") {
-    const result = await brokerRegistry.closePosition(signal.symbol);
-    if (result.ok) {
-      await telegram.sendTradeAlert("CLOSE", signal.symbol, qty, signal.price);
-    }
+    const result = await brokerRegistry.closePosition(signal.symbol, positionSide);
+    if (!result.ok) return { action: "filtered", reason: result.message };
+    await telegram.sendTradeAlert("CLOSE", signal.symbol, qty, signal.price);
     return { action: "executed", reason: result.message, orderId: result.orderId };
   }
 
@@ -61,8 +61,9 @@ export async function routeSignal(
     stopLoss: signal.stopLoss,
     takeProfit: signal.takeProfit,
   });
-  if (result.ok) {
-    await telegram.sendTradeAlert(signal.action, signal.symbol, qty, signal.price);
+  if (!result.ok) {
+    return { action: "filtered", reason: result.message };
   }
+  await telegram.sendTradeAlert(signal.action, signal.symbol, qty, signal.price, signal.stopLoss, signal.takeProfit);
   return { action: "executed", reason: result.message, orderId: result.orderId };
 }
